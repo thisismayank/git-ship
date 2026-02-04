@@ -1,0 +1,56 @@
+{
+  "name": "git-ship",
+  "version": "0.1.0",
+  "description": "AI-powered git workflow CLI: auto-group commits, fetch Linear context, run code review, and push",
+  "type": "module",
+  "bin": {
+    "git-ship": "./bin/git-ship.js",
+    "gs": "./bin/git-ship.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "bin/",
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node bin/git-ship.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/ tests/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "git",
+    "cli",
+    "ai",
+    "commit",
+    "linear",
+    "code-review",
+    "conventional-commits"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@inquirer/prompts": "^7.0.0",
+    "@linear/sdk": "^29.0.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "boxen": "^8.0.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "cosmiconfig": "^9.0.0",
+    "openai": "^4.85.0",
+    "ora": "^8.2.0",
+    "simple-git": "^3.27.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
