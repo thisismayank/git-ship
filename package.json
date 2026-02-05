@@ -1,6 +1,6 @@
 {
   "name": "git-ship",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "AI-powered git workflow CLI: auto-group commits, fetch Linear context, run code review, and push",
   "type": "module",
   "bin": {
