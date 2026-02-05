@@ -1,1 +1,0 @@
-{"version":3,"file":"coderabbit.d.ts","sourceRoot":"","sources":["../../src/review/coderabbit.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,aAAa,EAAE,YAAY,EAAiB,MAAM,aAAa,CAAC;AAI9E,qBAAa,iBAAkB,YAAW,aAAa;IACrD,IAAI,SAAgB;IAEd,WAAW,IAAI,OAAO,CAAC,OAAO,CAAC;IAI/B,SAAS,CAAC,UAAU,EAAE,MAAM,EAAE,GAAG,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,YAAY,CAAC;IAkBxE,OAAO,CAAC,WAAW;CA2CpB"}
