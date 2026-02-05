@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { GitShipConfig } from '../config/schema.js';
 import type { FileDiff } from '../git/diff.js';
 import type { LinearIssue } from '../linear/types.js';
@@ -125,6 +126,21 @@ async function callAnthropic(prompt: string, model: string): Promise<string> {
   return textBlock && 'text' in textBlock ? textBlock.text : '';
 }
 
+async function callGemini(prompt: string, model: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
+  if (!apiKey) throw new AIError('GEMINI_API_KEY (or GOOGLE_API_KEY) not set');
+
+  const client = new GoogleGenerativeAI(apiKey);
+  const genModel = client.getGenerativeModel({
+    model,
+    systemInstruction: 'You are a git commit grouping assistant. Respond only with valid JSON.',
+    generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+  });
+
+  const result = await genModel.generateContent(prompt);
+  return result.response.text();
+}
+
 export async function analyzeWithAI(
   config: GitShipConfig,
   diffs: FileDiff[],
@@ -138,6 +154,8 @@ export async function analyzeWithAI(
 
     if (config.ai.provider === 'anthropic') {
       responseText = await callAnthropic(prompt, config.ai.model);
+    } else if (config.ai.provider === 'gemini') {
+      responseText = await callGemini(prompt, config.ai.model ?? 'gemini-3-flash-preview');
     } else {
       responseText = await callOpenAI(prompt, config.ai.model);
     }

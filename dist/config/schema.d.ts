@@ -11,13 +11,13 @@ export declare const configSchema: z.ZodObject<{
         mcpEndpoint?: string | undefined;
     }>>;
     ai: z.ZodDefault<z.ZodObject<{
-        provider: z.ZodDefault<z.ZodEnum<["openai", "anthropic"]>>;
+        provider: z.ZodDefault<z.ZodEnum<["openai", "anthropic", "gemini"]>>;
         model: z.ZodDefault<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
-        provider: "openai" | "anthropic";
+        provider: "openai" | "anthropic" | "gemini";
         model: string;
     }, {
-        provider?: "openai" | "anthropic" | undefined;
+        provider?: "openai" | "anthropic" | "gemini" | undefined;
         model?: string | undefined;
     }>>;
     review: z.ZodDefault<z.ZodObject<{
@@ -56,7 +56,7 @@ export declare const configSchema: z.ZodObject<{
         mcpEndpoint: string;
     };
     ai: {
-        provider: "openai" | "anthropic";
+        provider: "openai" | "anthropic" | "gemini";
         model: string;
     };
     review: {
@@ -77,7 +77,7 @@ export declare const configSchema: z.ZodObject<{
         mcpEndpoint?: string | undefined;
     } | undefined;
     ai?: {
-        provider?: "openai" | "anthropic" | undefined;
+        provider?: "openai" | "anthropic" | "gemini" | undefined;
         model?: string | undefined;
     } | undefined;
     review?: {

@@ -31,7 +31,7 @@ function applyEnvOverrides(config) {
     }
     if (process.env.GITSHIP_AI_PROVIDER) {
         const p = process.env.GITSHIP_AI_PROVIDER;
-        if (p === 'openai' || p === 'anthropic')
+        if (p === 'openai' || p === 'anthropic' || p === 'gemini')
             result.ai.provider = p;
     }
     if (process.env.GITSHIP_AI_MODEL) {

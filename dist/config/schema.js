@@ -5,7 +5,7 @@ export const configSchema = z.object({
         mcpEndpoint: z.string().url().default('https://mcp.linear.app/sse'),
     }).default({}),
     ai: z.object({
-        provider: z.enum(['openai', 'anthropic']).default('openai'),
+        provider: z.enum(['openai', 'anthropic', 'gemini']).default('openai'),
         model: z.string().default('gpt-4o'),
     }).default({}),
     review: z.object({
