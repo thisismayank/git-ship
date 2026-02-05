@@ -13,7 +13,7 @@ export async function pushToRemote(git, branch, options) {
         const message = error.message;
         if (message.includes('rejected') || message.includes('non-fast-forward')) {
             throw new GitError(`Push rejected for branch "${branch}"`, {
-                suggestion: 'Try running `git pull --rebase` first, then retry.',
+                suggestion: 'Try `git pull --rebase` first. If this is the first push and the remote has an initial commit (e.g. README), use `git pull origin <branch> --allow-unrelated-histories` then retry.',
                 cause: error,
             });
         }

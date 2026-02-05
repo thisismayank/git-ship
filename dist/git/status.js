@@ -29,8 +29,20 @@ export async function getStatus(git) {
     try {
         const status = await git.status();
         const branchSummary = await git.branchLocal();
+        // On repos with no commits, branchLocal().current can be empty.
+        // Fall back to symbolic-ref which works even before the first commit.
+        let branch = branchSummary.current;
+        if (!branch) {
+            try {
+                const ref = await git.raw(['symbolic-ref', '--short', 'HEAD']);
+                branch = ref.trim();
+            }
+            catch {
+                branch = 'main';
+            }
+        }
         return {
-            branch: branchSummary.current,
+            branch,
             tracking: status.tracking || null,
             changedFiles: mapFileStatus(status),
             isClean: status.isClean(),
