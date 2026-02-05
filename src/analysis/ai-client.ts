@@ -37,37 +37,87 @@ function buildPrompt(
     ? `\nLinear Issue: ${issue.identifier} - ${issue.title}\nDescription: ${issue.description ?? 'N/A'}\nLabels: ${issue.labels.join(', ')}\n`
     : '';
 
-  return `You are a commit grouping assistant. Given the following file changes, group them into logical commits.
+  return `You are a commit grouping engine that balances two goals: **small, reviewable commits** and **safe revertability**. Your job is to split staged file changes into the smallest commits a reviewer can understand in isolation, while ensuring no single revert breaks the build or runtime.
 ${issueContext}
+## Two Principles
+
+### 1. The Revert Test (safety floor)
+"If this commit were reverted tomorrow, would the remaining codebase still compile, pass lint, and run correctly?" If reverting would leave a dangling import, a missing function call, or a broken reference, the files **must** be in the same commit.
+
+### 2. The Review Test (quality goal)
+"Can a reviewer understand this commit without reading other commits in the set?" Prefer smaller, focused commits. When a group passes the Revert Test but covers multiple distinct concerns (e.g. a refactor AND a feature), split it further so each commit tells one clear story.
+
+When these two goals conflict, the Revert Test wins — never produce a commit that would break the build. But whenever files CAN be separated safely, they SHOULD be.
+
+## Decision Rules
+
+**Group together when:**
+- File A's diff imports, calls, or references something introduced or changed in file B's diff.
+- Removing either file's changes alone would cause a build error, a broken route, or a runtime crash.
+- The changes are two sides of the same contract (e.g. an interface definition and its implementation).
+
+**Separate when:**
+- A change is a standalone improvement (rename, format, lint fix) that works with or without the other changes.
+- Infrastructure / config changes (CI, lockfiles, tsconfig) don't depend on feature code in this diff.
+- A generic utility was refactored and also happens to be used by a new feature — if the refactor works on its own, it gets its own commit.
+- A large feature can be split into layers (e.g. data layer, then API layer) where earlier layers compile on their own — prefer the split for reviewability.
+
+## Worked Examples
+
+**Example 1 — Coupled feature files → single commit**
+\`src/api/routes/payments.ts\` adds a new endpoint that calls \`createCharge()\`.
+\`src/services/payments.ts\` exports \`createCharge()\`.
+→ Group together. Reverting only the route would leave dead code; reverting only the service would break the route. These are small enough to review as one unit.
+
+**Example 2 — Independent refactor + unrelated feature → separate commits**
+\`src/utils/format-date.ts\` refactors date formatting (no new exports consumed by other diffs).
+\`src/api/routes/users.ts\` adds a profile endpoint.
+→ Separate. Each change compiles and runs without the other, and a reviewer benefits from seeing them independently.
+
+**Example 3 — Feature files + tests**
+\`src/routes/orders.ts\`, \`src/controllers/orders.ts\`, \`src/services/orders.ts\` — all tightly coupled for a new "cancel order" feature.
+\`src/tests/orders.test.ts\` — tests that exercise the feature.
+→ Group feature files together. Include the tests in the same commit — a reviewer understanding the feature benefits from seeing the tests alongside the implementation, and tests alone don't break production if reverted.
+
+**Example 4 — Large feature that can be layered**
+\`src/models/subscription.ts\` adds a Subscription model with no external callers yet.
+\`src/services/billing.ts\` imports Subscription and adds billing logic.
+\`src/routes/billing.ts\` imports the billing service and exposes endpoints.
+→ Three commits if each layer compiles alone (model → service → route). A reviewer sees the data model first, then the logic, then the API surface. If the service can't compile without the route (circular dependency), group them.
+
+## Special Cases
+- **Tests & specs**: Group with the feature they test — reviewers benefit from seeing implementation and tests together. Only separate tests into their own commit when they cover existing (unchanged) code.
+- **Documentation / README**: Always a separate commit.
+- **Lockfiles** (package-lock.json, yarn.lock, pnpm-lock.yaml): Group with the package.json change that caused them.
+- **Migrations**: Group with the model/schema change they correspond to.
+
 ## Changed Files
 ${fileList}
 
-## Heuristic Pre-Groups
+## Heuristic Pre-Groups (use as a starting hint, override freely)
 ${heuristicInfo}
 
 ## Diffs
 ${diffDetails}
 
-## Instructions
-Group these files into logical commits. Each group should represent a single coherent change.
-Use conventional commit types: feat, fix, chore, docs, style, refactor, test, ci, build, perf.
-Every file must appear in exactly one group.
-
 ## Commit Message Rules
-- Use imperative mood in the summary (e.g. "add", "fix", "update" — NOT "added", "adding", "fixes")
+- Use imperative mood (e.g. "add", "fix", "update" — NOT "added", "adding", "fixes")
 - Keep the summary under ${maxMessageLength} characters
 - Start the summary with a lowercase letter
 - Do NOT end the summary with a period
-- Follow conventional commits format strictly: type(scope): summary
+- Follow conventional commits format: type(scope): summary
+- Use conventional commit types: feat, fix, chore, docs, style, refactor, test, ci, build, perf
 
-Respond with ONLY a JSON array (no markdown fencing):
+## Output Format
+
+Every file must appear in exactly one group. Respond with ONLY a JSON array (no markdown fencing, no commentary):
 [
   {
     "files": ["path/to/file1", "path/to/file2"],
     "type": "feat",
     "scope": "auth",
     "summary": "add OAuth2 login flow",
-    "rationale": "These files together implement the new login feature"
+    "rationale": "route imports createSession from service; reverting either alone would break the build"
   }
 ]`;
 }
@@ -107,7 +157,7 @@ async function callOpenAI(prompt: string, model: string): Promise<string> {
     messages: [
       {
         role: 'system',
-        content: 'You are a git commit grouping assistant. Respond only with valid JSON.',
+        content: 'You are a git commit grouping engine that balances reviewability and revertability. You produce the smallest, most reviewer-friendly commits that are each safe to revert independently. Respond only with valid JSON.',
       },
       { role: 'user', content: prompt },
     ],
@@ -127,7 +177,7 @@ async function callAnthropic(prompt: string, model: string): Promise<string> {
     model,
     max_tokens: 4096,
     messages: [{ role: 'user', content: prompt }],
-    system: 'You are a git commit grouping assistant. Respond only with valid JSON.',
+    system: 'You are a git commit grouping engine that balances reviewability and revertability. You produce the smallest, most reviewer-friendly commits that are each safe to revert independently. Respond only with valid JSON.',
   });
 
   const textBlock = response.content.find((b) => b.type === 'text');
@@ -141,7 +191,7 @@ async function callGemini(prompt: string, model: string): Promise<string> {
   const client = new GoogleGenerativeAI(apiKey);
   const genModel = client.getGenerativeModel({
     model,
-    systemInstruction: 'You are a git commit grouping assistant. Respond only with valid JSON.',
+    systemInstruction: 'You are a git commit grouping engine that balances reviewability and revertability. You produce the smallest, most reviewer-friendly commits that are each safe to revert independently. Respond only with valid JSON.',
     generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
   });
 
