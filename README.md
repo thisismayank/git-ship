@@ -40,7 +40,7 @@ $ git-ship
 [1/7] Detect branch        → parse issue ID from branch name (e.g., feat/ENG-123-...)
 [2/7] Fetch Linear context  → pull issue title, description, labels
 [3/7] Collect changes       → structured diffs for all changed files
-[4/7] Group into commits    → heuristic pre-group, then AI refines using diffs + context
+[4/7] Group into commits    → heuristic pre-group, then AI refines into revertable commits
 [5/7] Review commit plan    → accept / edit messages / regroup / cancel
 [6/7] Code review           → CodeRabbit, Devin, Codex, or Graphite
 [7/7] Push to remote
@@ -76,7 +76,7 @@ git-ship --issue ENG-123  # Manually specify Linear issue
 
 |                          |                                                                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| **AI commit grouping**   | Groups changed files into logical commits using OpenAI, Anthropic, or Gemini — with heuristic fallback if AI is unavailable |
+| **AI commit grouping**   | Produces small, reviewer-friendly commits that are each safe to revert — powered by OpenAI, Anthropic, or Gemini with heuristic fallback |
 | **Linear integration**   | Parses issue IDs from branch names, fetches context, and adds refs to commit messages automatically                         |
 | **Code review gate**     | Runs CodeRabbit, Devin, Codex, or Graphite before pushing. Critical findings block the push.                                |
 | **Conventional commits** | Enforces type, scope, imperative mood, configurable length — no more inconsistent commit history                            |
@@ -85,9 +85,11 @@ git-ship --issue ENG-123  # Manually specify Linear issue
 
 ## Commit Grouping
 
-Files are grouped using a two-pass approach:
+Files are grouped using a two-pass approach that balances two goals: **small, reviewer-friendly commits** and **safe revertability**. Every commit should be easy to review in isolation *and* safe to revert without breaking the build.
 
-**Pass 1 — Heuristic pre-grouping** by file path:
+### Pass 1 — Heuristic pre-grouping
+
+A fast first pass groups files by path patterns:
 
 | Pattern                   | Category             |
 | ------------------------- | -------------------- |
@@ -98,9 +100,43 @@ Files are grouped using a two-pass approach:
 | `migrations/`             | `migration`          |
 | Source files              | Grouped by directory |
 
-**Pass 2 — AI semantic refinement** — the LLM refines groups using diff content and Linear issue context, producing structured JSON with type, scope, summary, and rationale per group.
+### Pass 2 — AI refinement
 
-If AI is unavailable, heuristic groups are used directly.
+The AI reads every diff and applies two tests:
+
+1. **The Revert Test** (safety floor) — *"If this commit were reverted, would the codebase still compile and run?"* Files that depend on each other must stay together.
+2. **The Review Test** (quality goal) — *"Can a reviewer understand this commit without reading the others?"* Prefer smaller, focused commits that each tell one clear story.
+
+When the two goals conflict, the Revert Test wins — no commit should break the build. But whenever files *can* be separated safely, they *should* be, to keep reviews focused.
+
+**Files are grouped together when:**
+
+- File A imports, calls, or references something introduced in file B's diff
+- Removing either file's changes alone would cause a build error or runtime crash
+- The changes are two sides of the same contract (e.g. an interface and its implementation)
+
+**Files are separated when:**
+
+- A change is a standalone improvement (rename, format, lint fix) that works independently
+- Infrastructure/config changes don't depend on feature code in the same diff
+- A generic utility refactor happens to be used by a new feature, but works on its own
+- A large feature can be split into layers (e.g. data model, then service, then route) where each layer compiles on its own
+
+### What to expect
+
+| Scenario | Result |
+| --- | --- |
+| New route + new service it imports | **One commit** — they depend on each other, and are small enough to review together |
+| Unrelated date-format refactor + new user endpoint | **Two commits** — each compiles and runs without the other; reviewer sees each change clearly |
+| Feature files (route, controller, service) + tests | **One commit** — reviewer benefits from seeing implementation and tests together; tests alone don't break production if reverted |
+| Large feature with independent layers | **Multiple commits** — split by layer (model → service → route) so reviewers see each concern separately |
+| `package.json` change + lockfile | **One commit** — lockfile is a side effect of the dependency change |
+| Migration + schema/model change | **One commit** — the migration only makes sense alongside the schema it supports |
+| README or docs update | **Separate commit** — always independent |
+
+### Fallback
+
+If AI is unavailable, heuristic groups from Pass 1 are used directly with auto-generated conventional commit messages.
 
 ## Code Review
 
