@@ -17,7 +17,9 @@ export const defaultConfig: GitShipConfig = {
     conventional: true,
     allowedTypes: ['feat', 'fix', 'chore', 'docs', 'style', 'refactor', 'test', 'ci', 'build', 'perf'],
     includeIssueRef: true,
+    maxMessageLength: 72,
   },
+  ignorePatterns: ['node_modules/**', '.env*', 'dist/**', '.DS_Store'],
   branch: {
     teamPrefixes: ['ENG', 'DES'],
   },

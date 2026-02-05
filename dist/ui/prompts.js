@@ -60,4 +60,17 @@ export async function promptSelectReviewTool() {
         ],
     });
 }
+export async function promptMaxMessageLength() {
+    const val = await input({
+        message: 'Max commit message length (20-200, default 72):',
+        default: '72',
+        validate: (val) => {
+            const n = parseInt(val.trim(), 10);
+            if (isNaN(n) || n < 20 || n > 200)
+                return 'Must be a number between 20 and 200';
+            return true;
+        },
+    });
+    return parseInt(val.trim(), 10);
+}
 //# sourceMappingURL=prompts.js.map

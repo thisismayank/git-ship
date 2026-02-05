@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig } from './config/loader.js';
+import { loadConfig, hasProjectConfig, writeProjectConfig } from './config/loader.js';
 import { createGit, getStatus } from './git/status.js';
 import { getFileDiffs } from './git/diff.js';
 import { stageAndCommitMultiple } from './git/commit.js';
@@ -18,7 +18,8 @@ import { CodexAdapter } from './review/codex.js';
 import { GraphiteAdapter } from './review/graphite.js';
 import { withSpinner } from './ui/spinner.js';
 import { displayIssueContext, displayCommitPlan, displayReviewResults, displayChangedFiles } from './ui/display.js';
-import { promptIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush } from './ui/prompts.js';
+import { promptIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptMaxMessageLength } from './ui/prompts.js';
+import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError } from './utils/errors.js';
 const TOTAL_STEPS = 7;
@@ -35,6 +36,12 @@ async function ship(options) {
     if (options.verbose)
         setLogLevel('debug');
     const config = await loadConfig();
+    // First-run setup: prompt for max commit message length if no project config exists
+    if (!(await hasProjectConfig())) {
+        const maxLen = await promptMaxMessageLength();
+        await writeProjectConfig({ commits: { maxMessageLength: maxLen } });
+        config.commits.maxMessageLength = maxLen;
+    }
     const git = createGit();
     // ─── Step 1: Detect branch & parse issue ID ───
     logger.step(1, TOTAL_STEPS, 'Detecting branch and issue ID...');
@@ -85,7 +92,11 @@ async function ship(options) {
     }
     // ─── Step 3: Collect changed files & parse diffs ───
     logger.step(3, TOTAL_STEPS, 'Collecting changes and parsing diffs...');
-    const changedFiles = status.changedFiles;
+    const changedFiles = status.changedFiles.filter((f) => !matchesAnyPattern(f.path, config.ignorePatterns));
+    if (changedFiles.length === 0) {
+        logger.info(chalk.dim('No changes to commit after filtering ignored files.'));
+        return;
+    }
     displayChangedFiles(changedFiles);
     logger.info(chalk.dim(`${changedFiles.length} file(s) changed`));
     const filePaths = changedFiles.map((f) => f.path);
@@ -148,6 +159,7 @@ async function ship(options) {
         includeIssueRef: config.commits.includeIssueRef,
         issueId,
         allowedTypes: config.commits.allowedTypes,
+        maxMessageLength: config.commits.maxMessageLength,
     });
     const results = await withSpinner(`Creating ${commitInputs.length} commit(s)`, () => stageAndCommitMultiple(git, commitInputs));
     for (const r of results) {

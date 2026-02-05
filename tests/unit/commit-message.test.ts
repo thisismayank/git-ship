@@ -7,6 +7,7 @@ const defaultOptions = {
   includeIssueRef: true,
   issueId: 'ENG-123',
   allowedTypes: ['feat', 'fix', 'chore', 'docs', 'style', 'refactor', 'test', 'ci', 'build', 'perf'],
+  maxMessageLength: 72,
 };
 
 function makeGroup(overrides: Partial<CommitGroup> = {}): CommitGroup {

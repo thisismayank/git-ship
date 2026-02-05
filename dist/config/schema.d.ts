@@ -34,15 +34,19 @@ export declare const configSchema: z.ZodObject<{
         conventional: z.ZodDefault<z.ZodBoolean>;
         allowedTypes: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
         includeIssueRef: z.ZodDefault<z.ZodBoolean>;
+        maxMessageLength: z.ZodDefault<z.ZodNumber>;
     }, "strip", z.ZodTypeAny, {
         conventional: boolean;
         allowedTypes: string[];
         includeIssueRef: boolean;
+        maxMessageLength: number;
     }, {
         conventional?: boolean | undefined;
         allowedTypes?: string[] | undefined;
         includeIssueRef?: boolean | undefined;
+        maxMessageLength?: number | undefined;
     }>>;
+    ignorePatterns: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
     branch: z.ZodDefault<z.ZodObject<{
         teamPrefixes: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
     }, "strip", z.ZodTypeAny, {
@@ -67,7 +71,9 @@ export declare const configSchema: z.ZodObject<{
         conventional: boolean;
         allowedTypes: string[];
         includeIssueRef: boolean;
+        maxMessageLength: number;
     };
+    ignorePatterns: string[];
     branch: {
         teamPrefixes: string[];
     };
@@ -88,7 +94,9 @@ export declare const configSchema: z.ZodObject<{
         conventional?: boolean | undefined;
         allowedTypes?: string[] | undefined;
         includeIssueRef?: boolean | undefined;
+        maxMessageLength?: number | undefined;
     } | undefined;
+    ignorePatterns?: string[] | undefined;
     branch?: {
         teamPrefixes?: string[] | undefined;
     } | undefined;

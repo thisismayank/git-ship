@@ -59,8 +59,24 @@ export async function getFileDiffs(git: SimpleGit, files: string[]): Promise<Fil
   try {
     const diffs: FileDiff[] = [];
 
+    // Check if HEAD exists (no commits yet = first commit scenario)
+    let hasHead = true;
+    try {
+      await git.revparse(['HEAD']);
+    } catch {
+      hasHead = false;
+    }
+
     // Get diff for tracked files (staged + unstaged)
-    const diffSummary = await git.diffSummary(['HEAD']);
+    // Use empty tree hash when HEAD doesn't exist (first commit)
+    const emptyTree = '4b825dc642cb6eb9a060e54bf899d69f82067100';
+    const diffRef = hasHead ? 'HEAD' : emptyTree;
+    let diffSummary;
+    try {
+      diffSummary = await git.diffSummary([diffRef]);
+    } catch {
+      diffSummary = { files: [] };
+    }
 
     for (const file of files) {
       const summaryEntry = diffSummary.files.find(
@@ -69,8 +85,8 @@ export async function getFileDiffs(git: SimpleGit, files: string[]): Promise<Fil
 
       let diffText = '';
       try {
-        // Try HEAD diff first (covers staged + unstaged against last commit)
-        diffText = await git.diff(['HEAD', '--', file]);
+        // Try diff against ref (covers staged + unstaged against last commit or empty tree)
+        diffText = await git.diff([diffRef, '--', file]);
       } catch {
         try {
           // For new untracked files, use diff with /dev/null

@@ -5,13 +5,14 @@ export interface CommitMessageOptions {
   includeIssueRef: boolean;
   issueId: string | null;
   allowedTypes: string[];
+  maxMessageLength: number;
 }
 
 export function formatCommitMessage(
   group: CommitGroup,
   options: CommitMessageOptions,
 ): string {
-  const { conventional, includeIssueRef, issueId, allowedTypes } = options;
+  const { conventional, includeIssueRef, issueId, allowedTypes, maxMessageLength } = options;
 
   if (!conventional) {
     const ref = includeIssueRef && issueId ? ` (${issueId})` : '';
@@ -21,7 +22,7 @@ export function formatCommitMessage(
   // Validate type
   const type = allowedTypes.includes(group.type) ? group.type : 'chore';
   const scope = group.scope ? `(${sanitizeScope(group.scope)})` : '';
-  const summary = sanitizeSummary(group.summary);
+  const summary = sanitizeSummary(group.summary, maxMessageLength);
   const ref = includeIssueRef && issueId ? `\n\nRefs: ${issueId}` : '';
 
   return `${type}${scope}: ${summary}${ref}`;
@@ -44,7 +45,7 @@ function sanitizeScope(scope: string): string {
     .slice(0, 30);
 }
 
-function sanitizeSummary(summary: string): string {
+function sanitizeSummary(summary: string, maxLength: number): string {
   // Ensure lowercase first letter
   let s = summary.trim();
   if (s.length === 0) return 'update';
@@ -52,6 +53,6 @@ function sanitizeSummary(summary: string): string {
   // Remove trailing period
   if (s.endsWith('.')) s = s.slice(0, -1);
   // Limit length
-  if (s.length > 72) s = s.slice(0, 69) + '...';
+  if (s.length > maxLength) s = s.slice(0, maxLength - 3) + '...';
   return s;
 }

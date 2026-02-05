@@ -4,10 +4,12 @@ AI-powered git workflow CLI that automates `git add`, `commit`, and `push` with 
 
 ## Features
 
-- **AI-powered commit grouping** — Groups changed files into logical commits using OpenAI or Anthropic, with heuristic fallback
+- **AI-powered commit grouping** — Groups changed files into logical commits using OpenAI, Anthropic, or Gemini, with heuristic fallback
 - **Linear integration** — Parses issue IDs from branch names, fetches issue context, and adds references to commit messages
 - **Code review gate** — Runs CodeRabbit, Devin, Codex, or Graphite Diamond before pushing
-- **Conventional commits** — Automatic formatting with type, scope, and issue refs
+- **Conventional commits** — Automatic formatting with type, scope, and issue refs; enforces imperative mood, lowercase start, no trailing period
+- **Configurable commit message length** — Set max message length per-project (prompted on first run, saved to `.gitshiprc.json`)
+- **File ignore patterns** — Automatically excludes `node_modules`, `.env*`, `dist`, and `.DS_Store` from commits
 - **Interactive CLI** — Review, edit, or regroup commits before they're created
 - **Dry-run mode** — Preview the commit plan without executing
 
@@ -89,31 +91,47 @@ Create a `.gitshiprc.json` in your project root (or use `gitship.config.js`, or 
   "commits": {
     "conventional": true,
     "allowedTypes": ["feat", "fix", "chore", "docs", "style", "refactor", "test", "ci", "build", "perf"],
-    "includeIssueRef": true
+    "includeIssueRef": true,
+    "maxMessageLength": 72
   },
+  "ignorePatterns": ["node_modules/**", ".env*", "dist/**", ".DS_Store"],
   "branch": {
     "teamPrefixes": ["ENG", "DES"]
   }
 }
 ```
 
+On first run, if no `.gitshiprc.json` exists, git-ship will prompt you for a max commit message length and save it to `.gitshiprc.json` automatically.
+
 ### Environment Variables
+
+git-ship loads a `.env` file from your project root automatically (via [dotenv](https://github.com/motdotla/dotenv)), so you can set API keys and config overrides there instead of exporting them in your shell.
+
+Example `.env`:
+
+```env
+OPENAI_API_KEY=sk-...
+GITSHIP_AI_PROVIDER=anthropic
+GITSHIP_AI_MODEL=claude-sonnet-4-20250514
+```
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `LINEAR_API_KEY` | For Linear features | Linear workspace API key |
 | `OPENAI_API_KEY` | For AI grouping (OpenAI) | OpenAI API key |
 | `ANTHROPIC_API_KEY` | For AI grouping (Anthropic) | Anthropic API key |
+| `GEMINI_API_KEY` | For AI grouping (Gemini) | Google Gemini API key (also accepts `GOOGLE_API_KEY`) |
 
 Config overrides via env vars:
 
 | Variable | Values |
 |----------|--------|
-| `GITSHIP_AI_PROVIDER` | `openai`, `anthropic` |
-| `GITSHIP_AI_MODEL` | Any model string |
+| `GITSHIP_AI_PROVIDER` | `openai`, `anthropic`, `gemini` |
+| `GITSHIP_AI_MODEL` | Any model string (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-3-flash-preview`) |
 | `GITSHIP_LINEAR_TRANSPORT` | `graphql`, `mcp` |
 | `GITSHIP_REVIEW_TOOL` | `coderabbit`, `devin`, `codex`, `graphite` |
 | `GITSHIP_REVIEW_ENABLED` | `true`, `false` |
+| `GITSHIP_COMMIT_MAX_LENGTH` | Number between `20` and `200` (overrides `commits.maxMessageLength`) |
 
 ## Commit Grouping
 
@@ -155,6 +173,7 @@ Review results are normalized to findings with severity levels (`critical`, `war
 | Review tool missing | Warn, offer to skip |
 | Push rejected | Show error, suggest `git pull --rebase` |
 | No changes | Clean exit with info message |
+| All files ignored | Clean exit with info message |
 
 ## Development
 

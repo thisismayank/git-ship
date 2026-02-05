@@ -19,6 +19,7 @@ function buildPrompt(
   diffs: FileDiff[],
   heuristicGroups: Array<{ category: string; files: string[] }>,
   issue: LinearIssue | null,
+  maxMessageLength: number = 72,
 ): string {
   const fileList = diffs
     .map((d) => `- ${d.path} (${d.status}, +${d.additions}/-${d.deletions})`)
@@ -51,6 +52,13 @@ ${diffDetails}
 Group these files into logical commits. Each group should represent a single coherent change.
 Use conventional commit types: feat, fix, chore, docs, style, refactor, test, ci, build, perf.
 Every file must appear in exactly one group.
+
+## Commit Message Rules
+- Use imperative mood in the summary (e.g. "add", "fix", "update" — NOT "added", "adding", "fixes")
+- Keep the summary under ${maxMessageLength} characters
+- Start the summary with a lowercase letter
+- Do NOT end the summary with a period
+- Follow conventional commits format strictly: type(scope): summary
 
 Respond with ONLY a JSON array (no markdown fencing):
 [
@@ -147,7 +155,7 @@ export async function analyzeWithAI(
   heuristicGroups: Array<{ category: string; files: string[] }>,
   issue: LinearIssue | null,
 ): Promise<AIGroupResult[] | null> {
-  const prompt = buildPrompt(diffs, heuristicGroups, issue);
+  const prompt = buildPrompt(diffs, heuristicGroups, issue, config.commits.maxMessageLength);
 
   try {
     let responseText: string;

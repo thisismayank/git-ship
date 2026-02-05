@@ -4,6 +4,7 @@ export interface CommitMessageOptions {
     includeIssueRef: boolean;
     issueId: string | null;
     allowedTypes: string[];
+    maxMessageLength: number;
 }
 export declare function formatCommitMessage(group: CommitGroup, options: CommitMessageOptions): string;
 export declare function formatAllCommitMessages(groups: CommitGroup[], options: CommitMessageOptions): Array<{

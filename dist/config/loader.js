@@ -1,3 +1,5 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { cosmiconfig } from 'cosmiconfig';
 import { configSchema } from './schema.js';
 import { defaultConfig } from './defaults.js';
@@ -46,6 +48,12 @@ function applyEnvOverrides(config) {
     if (process.env.GITSHIP_REVIEW_ENABLED !== undefined) {
         result.review.enabled = process.env.GITSHIP_REVIEW_ENABLED !== 'false';
     }
+    if (process.env.GITSHIP_COMMIT_MAX_LENGTH) {
+        const n = parseInt(process.env.GITSHIP_COMMIT_MAX_LENGTH, 10);
+        if (!isNaN(n) && n >= 20 && n <= 200) {
+            result.commits.maxMessageLength = n;
+        }
+    }
     return result;
 }
 export async function loadConfig(cwd) {
@@ -62,5 +70,28 @@ export async function loadConfig(cwd) {
     const merged = deepMerge(defaultConfig, fileConfig);
     const validated = configSchema.parse(merged);
     return applyEnvOverrides(validated);
+}
+const CONFIG_FILE = '.gitshiprc.json';
+export async function hasProjectConfig(cwd = process.cwd()) {
+    try {
+        await readFile(join(cwd, CONFIG_FILE), 'utf-8');
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+export async function writeProjectConfig(partial, cwd = process.cwd()) {
+    const filePath = join(cwd, CONFIG_FILE);
+    let existing = {};
+    try {
+        const raw = await readFile(filePath, 'utf-8');
+        existing = JSON.parse(raw);
+    }
+    catch {
+        // File doesn't exist yet — start fresh
+    }
+    const merged = deepMerge(existing, partial);
+    await writeFile(filePath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
 }
 //# sourceMappingURL=loader.js.map
