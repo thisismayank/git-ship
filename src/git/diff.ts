@@ -1,5 +1,10 @@
+import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { SimpleGit } from 'simple-git';
 import { GitError } from '../utils/errors.js';
+
+const execFileAsync = promisify(execFile);
 
 export interface DiffHunk {
   oldStart: number;
@@ -55,6 +60,41 @@ function parseHunks(diffText: string): DiffHunk[] {
   return hunks;
 }
 
+/**
+ * Run `git diff --no-index /dev/null <file>` and capture stdout even when
+ * exit code is 1 (which means "files differ" — expected for new files).
+ */
+async function diffNoIndex(file: string, cwd?: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git', ['diff', '--no-index', '--', '/dev/null', file],
+      { cwd, maxBuffer: 10 * 1024 * 1024 },
+    );
+    return stdout;
+  } catch (err: unknown) {
+    // exit code 1 = files differ, stdout still contains the diff
+    const e = err as { code?: number; stdout?: string };
+    if (e.code === 1 && e.stdout) return e.stdout;
+    return '';
+  }
+}
+
+/**
+ * Build a synthetic diff from file contents when git diff isn't available.
+ */
+async function syntheticDiff(file: string, cwd?: string): Promise<{ text: string; lines: number }> {
+  try {
+    const filePath = cwd ? `${cwd}/${file}` : file;
+    const content = await readFile(filePath, 'utf-8');
+    const lines = content.split('\n');
+    const body = lines.map((l) => `+${l}`).join('\n');
+    const text = `@@ -0,0 +1,${lines.length} @@\n${body}`;
+    return { text, lines: lines.length };
+  } catch {
+    return { text: '', lines: 0 };
+  }
+}
+
 export async function getFileDiffs(git: SimpleGit, files: string[]): Promise<FileDiff[]> {
   try {
     const diffs: FileDiff[] = [];
@@ -88,22 +128,27 @@ export async function getFileDiffs(git: SimpleGit, files: string[]): Promise<Fil
         // Try diff against ref (covers staged + unstaged against last commit or empty tree)
         diffText = await git.diff([diffRef, '--', file]);
       } catch {
-        try {
-          // For new untracked files, use diff with /dev/null
-          diffText = await git.diff(['--no-index', '/dev/null', file]);
-        } catch {
-          // diff --no-index returns exit code 1 when files differ, but still outputs diff
-          // simple-git treats non-zero exit as error, so we catch and try raw
-        }
+        // For untracked files (common on first commit), git diff against a
+        // ref won't work. Use --no-index via child_process so we can capture
+        // stdout even when exit code is 1 (files differ).
+        diffText = await diffNoIndex(file);
+      }
+
+      // If we still have no diff text, build a synthetic one from file contents
+      if (!diffText) {
+        const synthetic = await syntheticDiff(file);
+        diffText = synthetic.text;
       }
 
       const binary = diffText.includes('Binary files');
       const hunks = binary ? [] : parseHunks(diffText);
+      const additions = hunks.reduce((sum, h) =>
+        sum + h.content.split('\n').filter((l) => l.startsWith('+')).length, 0);
 
       diffs.push({
         path: file,
         status: summaryEntry ? (summaryEntry.binary ? 'binary' : 'modified') : 'added',
-        additions: summaryEntry && !summaryEntry.binary ? summaryEntry.insertions : 0,
+        additions: summaryEntry && !summaryEntry.binary ? summaryEntry.insertions : additions,
         deletions: summaryEntry && !summaryEntry.binary ? summaryEntry.deletions : 0,
         hunks,
         binary,
