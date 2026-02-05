@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig, hasProjectConfig, writeProjectConfig } from './config/loader.js';
@@ -23,6 +24,10 @@ import { promptIssueId, promptCommitPlanAction, promptEditCommitMessage, promptR
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError } from './utils/errors.js';
+import { checkForUpdate, displayUpdateNotification } from './utils/update-check.js';
+
+const require = createRequire(import.meta.url);
+const { version: VERSION } = require('../package.json');
 
 const TOTAL_STEPS = 7;
 
@@ -280,7 +285,7 @@ const program = new Command();
 program
   .name('git-ship')
   .description('AI-powered git workflow: auto-group commits, fetch Linear context, review & push')
-  .version('0.1.0')
+  .version(VERSION)
   .option('-d, --dry-run', 'Show commit plan without executing')
   .option('-v, --verbose', 'Enable verbose logging')
   .option('--review-tool <tool>', 'Override review tool (coderabbit, devin, codex, graphite)')
@@ -300,6 +305,9 @@ program
       // Rethrow unexpected errors
       throw error;
     }
+
+    const latest = await checkForUpdate(VERSION).catch(() => null);
+    if (latest) displayUpdateNotification(VERSION, latest);
   });
 
 program.parse();
