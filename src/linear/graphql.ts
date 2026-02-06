@@ -8,13 +8,11 @@ export function createGraphQLClient(apiKey: string): LinearClient {
   return {
     async getIssue(issueId: string): Promise<LinearIssue | null> {
       try {
-        // Linear SDK uses the identifier (e.g., "ENG-123") to search
-        const issues = await sdk.issueSearch({ query: issueId, first: 1 });
-        const nodes = issues.nodes;
+        // Use issue() directly with the identifier (e.g., "ENG-123")
+        const issue = await sdk.issue(issueId);
 
-        if (nodes.length === 0) return null;
+        if (!issue) return null;
 
-        const issue = nodes[0];
         const state = await issue.state;
         const labels = await issue.labels();
 
@@ -29,6 +27,11 @@ export function createGraphQLClient(apiKey: string): LinearClient {
           url: issue.url,
         };
       } catch (error) {
+        // If issue not found, the SDK throws an error
+        const errorMessage = (error as Error).message || '';
+        if (errorMessage.includes('not found') || errorMessage.includes('Entity not found')) {
+          return null;
+        }
         throw new LinearError(`Failed to fetch issue ${issueId}`, { cause: error });
       }
     },
