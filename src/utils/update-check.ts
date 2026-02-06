@@ -87,3 +87,18 @@ export function displayUpdateNotification(current: string, latest: string): void
     }),
   );
 }
+
+export function displayUpdateBanner(current: string, latest: string): void {
+  const message =
+    `Update available! ${chalk.dim(current)} → ${chalk.green(latest)}`;
+
+  console.log(
+    boxen(message, {
+      padding: { top: 0, bottom: 0, left: 1, right: 1 },
+      margin: { top: 0, bottom: 1, left: 0, right: 0 },
+      borderColor: 'yellow',
+      borderStyle: 'round',
+      textAlignment: 'center',
+    }),
+  );
+}

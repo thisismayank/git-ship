@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Command } from 'commander';
+import { select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { loadConfig, hasProjectConfig } from './config/loader.js';
 import { shouldRunGlobalSetup, runGlobalSetupWizard } from './config/setup-wizard.js';
@@ -30,7 +31,7 @@ import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEdit
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError } from './utils/errors.js';
-import { checkForUpdate, displayUpdateNotification } from './utils/update-check.js';
+import { checkForUpdate, displayUpdateBanner } from './utils/update-check.js';
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json');
@@ -370,6 +371,24 @@ More info: https://github.com/thisismayank/git-ship
         return;
       }
 
+      // Check for updates before starting the workflow
+      const latest = await checkForUpdate(VERSION).catch(() => null);
+      if (latest) {
+        displayUpdateBanner(VERSION, latest);
+        const action = await select({
+          message: 'A new version is available. What would you like to do?',
+          choices: [
+            { name: 'Update now', value: 'update' as const },
+            { name: 'Skip and continue', value: 'skip' as const },
+          ],
+        });
+
+        if (action === 'update') {
+          logger.info(`\nRun: ${chalk.cyan('npm i -g git-ship')}\n`);
+          return;
+        }
+      }
+
       await ship(options);
     } catch (error) {
       if (error instanceof GitShipError) {
@@ -382,9 +401,6 @@ More info: https://github.com/thisismayank/git-ship
       // Rethrow unexpected errors
       throw error;
     }
-
-    const latest = await checkForUpdate(VERSION).catch(() => null);
-    if (latest) displayUpdateNotification(VERSION, latest);
   });
 
 program.parse();
