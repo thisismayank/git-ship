@@ -18,6 +18,37 @@ export async function promptIssueId(
   });
 }
 
+export type IssueIdAction = "use" | "edit" | "skip";
+
+export async function promptConfirmIssueId(
+  detectedId: string,
+  branchName: string
+): Promise<{ action: IssueIdAction; issueId: string | null }> {
+  const action = await select<IssueIdAction>({
+    message: `Detected issue ID "${detectedId}" from branch. Is this correct?`,
+    choices: [
+      { name: `Yes, use ${detectedId}`, value: "use" },
+      { name: "No, enter different ID", value: "edit" },
+      { name: "Skip (no issue ID)", value: "skip" },
+    ],
+  });
+
+  if (action === "use") {
+    return { action, issueId: detectedId };
+  }
+
+  if (action === "edit") {
+    const issueId = await input({
+      message: "Enter the correct Linear issue ID (e.g., ENG-123):",
+      validate: (val) =>
+        val.trim().length > 0 ? true : "Issue ID cannot be empty",
+    });
+    return { action, issueId };
+  }
+
+  return { action, issueId: null };
+}
+
 export type CommitPlanAction = "accept" | "edit" | "regroup" | "cancel";
 
 export async function promptCommitPlanAction(): Promise<CommitPlanAction> {

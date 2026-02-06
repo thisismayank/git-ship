@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { cosmiconfig } from 'cosmiconfig';
 import { configSchema, type GitShipConfig } from './schema.js';
 import { defaultConfig } from './defaults.js';
+import { loadGlobalConfig } from './global.js';
 
 const explorer = cosmiconfig('gitship');
 
@@ -54,6 +55,19 @@ function applyEnvOverrides(config: GitShipConfig): GitShipConfig {
   if (process.env.GITSHIP_REVIEW_ENABLED !== undefined) {
     result.review.enabled = process.env.GITSHIP_REVIEW_ENABLED !== 'false';
   }
+  if (process.env.GITSHIP_REVIEW_TRANSPORT) {
+    const t = process.env.GITSHIP_REVIEW_TRANSPORT;
+    if (t === 'mcp' || t === 'cli') result.review.transport = t;
+  }
+  if (process.env.GITSHIP_DEVIN_ENDPOINT) {
+    result.review.endpoints.devin = process.env.GITSHIP_DEVIN_ENDPOINT;
+  }
+  if (process.env.GITSHIP_CODERABBIT_ENDPOINT) {
+    result.review.endpoints.coderabbit = process.env.GITSHIP_CODERABBIT_ENDPOINT;
+  }
+  if (process.env.GITSHIP_CODEX_ENDPOINT) {
+    result.review.endpoints.codex = process.env.GITSHIP_CODEX_ENDPOINT;
+  }
   if (process.env.GITSHIP_COMMIT_MAX_LENGTH) {
     const n = parseInt(process.env.GITSHIP_COMMIT_MAX_LENGTH, 10);
     if (!isNaN(n) && n >= 20 && n <= 200) {
@@ -65,18 +79,33 @@ function applyEnvOverrides(config: GitShipConfig): GitShipConfig {
 }
 
 export async function loadConfig(cwd?: string): Promise<GitShipConfig> {
-  let fileConfig: Partial<GitShipConfig> = {};
+  // Precedence: CLI args → env vars → local → global → defaults
+  // (CLI args and env vars are applied later in applyEnvOverrides)
 
+  // Load global config
+  const globalConfig = await loadGlobalConfig() ?? {};
+
+  // Load local/project config
+  let localConfig: Partial<GitShipConfig> = {};
   try {
     const result = cwd ? await explorer.search(cwd) : await explorer.search();
     if (result && !result.isEmpty) {
-      fileConfig = result.config as Partial<GitShipConfig>;
+      localConfig = result.config as Partial<GitShipConfig>;
     }
   } catch {
     // Config file not found or invalid — use defaults
   }
 
-  const merged = deepMerge(defaultConfig as Record<string, unknown>, fileConfig as Record<string, unknown>);
+  // Merge: defaults → global → local
+  const withGlobal = deepMerge(
+    defaultConfig as Record<string, unknown>,
+    globalConfig as Record<string, unknown>,
+  );
+  const merged = deepMerge(
+    withGlobal as Record<string, unknown>,
+    localConfig as Record<string, unknown>,
+  );
+
   const validated = configSchema.parse(merged);
   return applyEnvOverrides(validated);
 }

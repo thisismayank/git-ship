@@ -14,6 +14,12 @@ export const configSchema = z.object({
   review: z.object({
     enabled: z.boolean().default(true),
     tool: z.enum(['coderabbit', 'devin', 'codex', 'graphite']).default('coderabbit'),
+    transport: z.enum(['mcp', 'cli']).default('mcp'),
+    endpoints: z.object({
+      devin: z.string().url().default('https://mcp.devin.ai/sse'),
+      coderabbit: z.string().url().default('https://mcp.coderabbit.ai/sse'),
+      codex: z.string().url().default('http://localhost:3000/sse'),
+    }).default({}),
   }).default({}),
 
   commits: z.object({
@@ -38,3 +44,37 @@ export const configSchema = z.object({
 });
 
 export type GitShipConfig = z.infer<typeof configSchema>;
+
+// Global config schema - subset for user-level settings
+export const globalConfigSchema = z.object({
+  ai: z.object({
+    provider: z.enum(['openai', 'anthropic', 'gemini']),
+    model: z.string(),
+  }).partial(),
+
+  linear: z.object({
+    transport: z.enum(['graphql', 'mcp']),
+    mcpEndpoint: z.string().url(),
+  }).partial(),
+
+  branch: z.object({
+    teamPrefixes: z.array(z.string()),
+  }).partial(),
+
+  review: z.object({
+    enabled: z.boolean(),
+    tool: z.enum(['coderabbit', 'devin', 'codex', 'graphite']),
+    transport: z.enum(['mcp', 'cli']),
+    endpoints: z.object({
+      devin: z.string().url(),
+      coderabbit: z.string().url(),
+      codex: z.string().url(),
+    }).partial(),
+  }).partial(),
+
+  commits: z.object({
+    maxMessageLength: z.number().min(20).max(200),
+  }).partial(),
+}).partial();
+
+export type GlobalConfigInput = z.infer<typeof globalConfigSchema>;

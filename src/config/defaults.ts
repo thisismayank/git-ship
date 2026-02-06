@@ -12,6 +12,12 @@ export const defaultConfig: GitShipConfig = {
   review: {
     enabled: true,
     tool: 'coderabbit',
+    transport: 'mcp',
+    endpoints: {
+      devin: 'https://mcp.devin.ai/sse',
+      coderabbit: 'https://mcp.coderabbit.ai/sse',
+      codex: 'http://localhost:3000/sse',
+    },
   },
   commits: {
     conventional: true,
@@ -19,7 +25,7 @@ export const defaultConfig: GitShipConfig = {
     includeIssueRef: true,
     maxMessageLength: 72,
   },
-  ignorePatterns: ['node_modules/**', '.env*', 'dist/**', '.DS_Store'],
+  ignorePatterns: ['node_modules/**', '.env*', 'dist/**', '.DS_Store', '.gitshiprc.json'],
   branch: {
     teamPrefixes: ['ENG', 'DES'],
   },

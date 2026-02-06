@@ -1,8 +1,14 @@
 import 'dotenv/config';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, hasProjectConfig, writeProjectConfig } from './config/loader.js';
+import { loadConfig, hasProjectConfig } from './config/loader.js';
+import { shouldRunGlobalSetup, runGlobalSetupWizard } from './config/setup-wizard.js';
+import { shouldRunRepoSetup, promptRepoSetup, runRepoSetupWizard, markRepoAsUsingGlobalConfig } from './config/repo-setup.js';
+import type { GitShipConfig } from './config/schema.js';
 import { createGit, getStatus } from './git/status.js';
 import { getFileDiffs } from './git/diff.js';
 import { stageAndCommitMultiple } from './git/commit.js';
@@ -20,7 +26,7 @@ import { CodexAdapter } from './review/codex.js';
 import { GraphiteAdapter } from './review/graphite.js';
 import { withSpinner } from './ui/spinner.js';
 import { displayIssueContext, displayCommitPlan, displayReviewResults, displayChangedFiles } from './ui/display.js';
-import { promptIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptMaxMessageLength } from './ui/prompts.js';
+import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush } from './ui/prompts.js';
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError } from './utils/errors.js';
@@ -29,15 +35,48 @@ import { checkForUpdate, displayUpdateNotification } from './utils/update-check.
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json');
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PACKAGE_ROOT = join(__dirname, '..');
+
 const TOTAL_STEPS = 7;
 
-function getReviewAdapter(tool: string): ReviewAdapter {
+function displayReadme(): void {
+  try {
+    const readmePath = join(PACKAGE_ROOT, 'README.md');
+    const readme = readFileSync(readmePath, 'utf-8');
+    console.log(readme);
+  } catch {
+    logger.error('Could not read README.md');
+    logger.info('View online at: https://github.com/thisismayank/git-ship#readme');
+  }
+}
+
+function getReviewAdapter(tool: string, config: GitShipConfig): ReviewAdapter {
   switch (tool) {
-    case 'coderabbit': return new CodeRabbitAdapter();
-    case 'devin': return new DevinAdapter();
-    case 'codex': return new CodexAdapter();
-    case 'graphite': return new GraphiteAdapter();
-    default: return new CodeRabbitAdapter();
+    case 'coderabbit': return new CodeRabbitAdapter(config);
+    case 'devin': return new DevinAdapter(config);
+    case 'codex': return new CodexAdapter(config);
+    case 'graphite': return new GraphiteAdapter(config);
+    default: return new CodeRabbitAdapter(config);
+  }
+}
+
+async function ensureSetup(): Promise<void> {
+  // Global setup wizard - first-time setup
+  if (await shouldRunGlobalSetup()) {
+    await runGlobalSetupWizard();
+  }
+
+  // Repo setup - prompt for global vs custom config
+  if (await shouldRunRepoSetup()) {
+    const choice = await promptRepoSetup();
+    if (choice === 'customize') {
+      await runRepoSetupWizard();
+    } else if (choice === 'use-global') {
+      await markRepoAsUsingGlobalConfig();
+    }
+    // 'skip' - no action needed, will prompt again next time
   }
 }
 
@@ -50,14 +89,10 @@ async function ship(options: {
 }): Promise<void> {
   if (options.verbose) setLogLevel('debug');
 
-  const config = await loadConfig();
+  // Run setup wizards if needed (global and/or repo)
+  await ensureSetup();
 
-  // First-run setup: prompt for max commit message length if no project config exists
-  if (!(await hasProjectConfig())) {
-    const maxLen = await promptMaxMessageLength();
-    await writeProjectConfig({ commits: { maxMessageLength: maxLen } });
-    config.commits.maxMessageLength = maxLen;
-  }
+  const config = await loadConfig();
 
   const git = createGit();
 
@@ -77,7 +112,17 @@ async function ship(options: {
   let issueId: string | null = options.issue ?? null;
   if (!issueId) {
     const parsed = parseBranch(branchName, config.branch.teamPrefixes);
-    issueId = parsed.issueId;
+
+    if (parsed.issueId) {
+      if (parsed.confidence === 'high') {
+        // High confidence: use directly
+        issueId = parsed.issueId;
+      } else {
+        // Medium confidence: ask user to confirm
+        const result = await promptConfirmIssueId(parsed.issueId, branchName);
+        issueId = result.issueId;
+      }
+    }
   }
 
   if (!issueId) {
@@ -224,7 +269,7 @@ async function ship(options: {
     logger.step(6, TOTAL_STEPS, 'Running code review...');
 
     const reviewToolName = options.reviewTool ?? config.review.tool;
-    const adapter = getReviewAdapter(reviewToolName);
+    const adapter = getReviewAdapter(reviewToolName, config);
 
     try {
       const reviewResult = await withSpinner(
@@ -291,8 +336,40 @@ program
   .option('--review-tool <tool>', 'Override review tool (coderabbit, devin, codex, graphite)')
   .option('--no-review', 'Skip code review step')
   .option('-i, --issue <id>', 'Manually specify Linear issue ID')
+  .option('--setup', 'Re-run the setup wizard to update configuration')
+  .option('--readme', 'Display the full README documentation')
+  .addHelpText('after', `
+Examples:
+  $ gs                        Run the full interactive workflow
+  $ gs --dry-run              Preview commit plan without executing
+  $ gs --no-review            Skip the code review step
+  $ gs -i ENG-123             Manually specify a Linear issue ID
+  $ gs --setup                Re-run the setup wizard
+  $ gs --readme               Display full documentation
+
+Configuration:
+  Global config:  ~/.config/gitship/config.json
+  Local config:   .gitshiprc.json (per-repo overrides)
+  API keys:       Stored in your shell profile (~/.zshrc, ~/.bashrc, etc.)
+
+More info: https://github.com/thisismayank/git-ship
+`)
   .action(async (options) => {
     try {
+      // If --readme flag is passed, display the README and exit
+      if (options.readme) {
+        displayReadme();
+        return;
+      }
+
+      // If --setup flag is passed, force re-run the setup wizard
+      if (options.setup) {
+        const { runGlobalSetupWizard } = await import('./config/setup-wizard.js');
+        await runGlobalSetupWizard();
+        logger.info(chalk.dim('\nSetup complete. Run gs again to commit changes.'));
+        return;
+      }
+
       await ship(options);
     } catch (error) {
       if (error instanceof GitShipError) {

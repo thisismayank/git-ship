@@ -14,6 +14,7 @@ export interface ReviewResult {
 
 export interface ReviewAdapter {
   name: string;
+  transport: 'mcp' | 'cli';
   isAvailable(): Promise<boolean>;
   runReview(baseBranch: string, cwd?: string): Promise<ReviewResult>;
 }
