@@ -1,15 +1,24 @@
 import type { ReviewAdapter, ReviewResult } from './runner.js';
 import { exec, isCommandAvailable } from '../utils/exec.js';
 import { ReviewError } from '../utils/errors.js';
+import type { GitShipConfig } from '../config/schema.js';
 
 export class GraphiteAdapter implements ReviewAdapter {
   name = 'Graphite Diamond';
+  transport: 'mcp' | 'cli' = 'cli'; // Graphite is CLI-only
+
+  private config: GitShipConfig;
+
+  constructor(config: GitShipConfig) {
+    this.config = config;
+    // Graphite Diamond only uses CLI (gt command)
+  }
 
   async isAvailable(): Promise<boolean> {
     return isCommandAvailable('gt');
   }
 
-  async runReview(baseBranch: string, cwd?: string): Promise<ReviewResult> {
+  async runReview(_baseBranch: string, cwd?: string): Promise<ReviewResult> {
     try {
       // Graphite Diamond requires pushing first and creating a draft PR
       // Then it reviews via the PR
