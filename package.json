@@ -1,7 +1,16 @@
 {
   "name": "git-ship",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "AI-powered git workflow CLI: auto-group commits, fetch Linear context, run code review, and push",
+  "author": "Mayank Agarwal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thisismayank/git-ship.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thisismayank/git-ship/issues"
+  },
+  "homepage": "https://github.com/thisismayank/git-ship#readme",
   "type": "module",
   "bin": {
     "git-ship": "./bin/git-ship.js",
@@ -11,7 +20,7 @@
   "files": [
     "bin/",
     "dist/",
-    "docs/screenshots/"
+    "docs/screenshots"
   ],
   "scripts": {
     "build": "tsc",
