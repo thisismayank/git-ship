@@ -3,7 +3,7 @@
   <p align="center">
     AI-powered git workflow that turns your messy changes into clean, grouped, conventional commits — then reviews and pushes them.
     <br />
-    One command: <code>git-ship</code>
+    One command: <code>git-ship</code> check
   </p>
 </p>
 
