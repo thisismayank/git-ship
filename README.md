@@ -20,16 +20,16 @@ Stop writing commit messages. `git-ship` reads your diffs, groups related change
 
 ## Why I Built This
 
-Every developer knows the routine: you’ve been heads-down on a feature for hours, touching fifteen files across four concerns. Now it’s time to commit. You stare at `git diff --stat`, mentally sort files into groups, write conventional commit messages, stage carefully, and hope you didn’t mix a migration with a test change. Then you do it again for the next group. And the next.
+Every developer knows the routine: you've been heads-down on a feature for hours, touching fifteen files across four concerns. Now it's time to commit. You stare at `git diff --stat`, mentally sort files into groups, write conventional commit messages, stage carefully, and hope you didn't mix a migration with a test change. Then you do it again for the next group. And the next.
 
 Most of the time, you give up and write `git commit -am "update stuff"`. The commit history turns into noise. When someone needs to bisect a bug or review what changed, the history is useless.
 
-I built **git-ship** because the commit–review–push workflow felt like it should be one step. The AI is good at reading diffs and understanding which changes belong together. The branch name already tells you what you’re working on. The review tool is already installed. Why am I the glue between all of these?
+I built **git-ship** because the commit–review–push workflow felt like it should be one step. The AI is good at reading diffs and understanding which changes belong together. The branch name already tells you what you're working on. The review tool is already installed. Why am I the glue between all of these?
 
 Now I run `gs`, review the plan, and hit enter. Clean history, every time.
 
 <p align="center">
-  <img src="docs/screenshots/git-ship.png" alt="git-ship in action" width="700" />
+  <img src="docs/screenshots/git-ship-a.png" alt="git-ship in action" width="700" />
 </p>
 
 ## How It Works
@@ -54,6 +54,33 @@ You stay in control. Every step is interactive — review the plan, edit message
 npm install -g git-ship
 ```
 
+## Quick Start
+
+On first run, git-ship launches an interactive setup wizard:
+
+```
+$ gs
+
+Welcome to git-ship! Let's set up your configuration.
+
+1. AI Provider Configuration
+   → Choose OpenAI, Anthropic, or Gemini
+   → Enter your API key (saved to shell profile)
+
+2. Linear Integration
+   → Connect Linear for issue context (optional)
+   → Validate connection
+   → Configure team prefixes (e.g., ENG, DES)
+
+3. Code Review Tool (Optional)
+   → Choose Graphite, CodeRabbit, Codex, Devin, or skip
+
+4. Commit Settings
+   → Max commit message length
+```
+
+Configuration is saved globally (`~/.config/gitship/config.json`) and works across all repos.
+
 ## Usage
 
 ```bash
@@ -62,30 +89,61 @@ gs                    # Shorthand alias
 git-ship --dry-run    # Preview commit plan without executing
 git-ship --no-review  # Skip code review
 git-ship --issue ENG-123  # Manually specify Linear issue
+git-ship --setup      # Re-run setup wizard to update configuration
+git-ship --help       # Show all available commands
+git-ship --readme     # Display full documentation
 ```
 
 | Flag                   | Description                                                       |
 | ---------------------- | ----------------------------------------------------------------- |
+| `-h, --help`           | Show all available commands with descriptions                     |
 | `-d, --dry-run`        | Show commit plan without executing                                |
 | `-v, --verbose`        | Enable debug logging                                              |
 | `--review-tool <tool>` | Override review tool (`coderabbit`, `devin`, `codex`, `graphite`) |
 | `--no-review`          | Skip code review                                                  |
 | `-i, --issue <id>`     | Manually specify Linear issue ID                                  |
+| `--setup`              | Re-run setup wizard to update API keys or configuration           |
+| `--readme`             | Display the full README documentation in terminal                 |
 
 ## What Makes It Different
 
-|                          |                                                                                                                             |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| **AI commit grouping**   | Produces small, reviewer-friendly commits that are each safe to revert — powered by OpenAI, Anthropic, or Gemini with heuristic fallback |
-| **Linear integration**   | Parses issue IDs from branch names, fetches context, and adds refs to commit messages automatically                         |
-| **Code review gate**     | Runs CodeRabbit, Devin, Codex, or Graphite before pushing. Critical findings block the push.                                |
-| **Conventional commits** | Enforces type, scope, imperative mood, configurable length — no more inconsistent commit history                            |
-| **Smart file filtering** | Automatically ignores `node_modules`, `.env*`, `dist`, `.DS_Store` — configurable via `ignorePatterns`                      |
-| **First-run setup**      | Prompts for preferences on first run and saves to `.gitshiprc.json` — no manual config needed                               |
+|                           |                                                                                                                                          |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **AI commit grouping**    | Produces small, reviewer-friendly commits that are each safe to revert — powered by OpenAI, Anthropic, or Gemini with heuristic fallback |
+| **Linear integration**    | Parses issue IDs from branch names, fetches context, and adds refs to commit messages automatically                                      |
+| **Code review gate**      | Runs CodeRabbit, Devin, Codex, or Graphite before pushing. Critical findings block the push.                                             |
+| **Conventional commits**  | Enforces type, scope, imperative mood, configurable length — no more inconsistent commit history                                         |
+| **Smart file filtering**  | Automatically ignores `node_modules`, `.env*`, `dist`, `.DS_Store`, `.gitshiprc.json` — configurable via `ignorePatterns`                |
+| **Global + local config** | One-time setup works across all repos; override per-repo when needed                                                                     |
+
+## Branch Parsing
+
+git-ship detects Linear issue IDs from branch names with flexible matching:
+
+| Branch Name                        | Detected Issue | Confidence |
+| ---------------------------------- | -------------- | ---------- |
+| `feat/ENG-123-user-auth`           | `ENG-123`      | High       |
+| `fix/eng-456`                      | `ENG-456`      | High       |
+| `feat/oxford-optimisation-elm-123` | `ELM-123`      | High\*     |
+| `mayank/DES-789-design-update`     | `DES-789`      | High       |
+| `feature-abc-123-description`      | `ABC-123`      | Medium\*\* |
+
+\*If `ELM` is in your configured team prefixes
+\*\*Medium confidence prompts for confirmation
+
+Configure team prefixes during setup or in config:
+
+```json
+{
+  "branch": {
+    "teamPrefixes": ["ENG", "DES", "ELM", "PROD"]
+  }
+}
+```
 
 ## Commit Grouping
 
-Files are grouped using a two-pass approach that balances two goals: **small, reviewer-friendly commits** and **safe revertability**. Every commit should be easy to review in isolation *and* safe to revert without breaking the build.
+Files are grouped using a two-pass approach that balances two goals: **small, reviewer-friendly commits** and **safe revertability**. Every commit should be easy to review in isolation _and_ safe to revert without breaking the build.
 
 ### Pass 1 — Heuristic pre-grouping
 
@@ -104,35 +162,10 @@ A fast first pass groups files by path patterns:
 
 The AI reads every diff and applies two tests:
 
-1. **The Revert Test** (safety floor) — *"If this commit were reverted, would the codebase still compile and run?"* Files that depend on each other must stay together.
-2. **The Review Test** (quality goal) — *"Can a reviewer understand this commit without reading the others?"* Prefer smaller, focused commits that each tell one clear story.
+1. **The Revert Test** (safety floor) — _"If this commit were reverted, would the codebase still compile and run?"_ Files that depend on each other must stay together.
+2. **The Review Test** (quality goal) — _"Can a reviewer understand this commit without reading the others?"_ Prefer smaller, focused commits that each tell one clear story.
 
-When the two goals conflict, the Revert Test wins — no commit should break the build. But whenever files *can* be separated safely, they *should* be, to keep reviews focused.
-
-**Files are grouped together when:**
-
-- File A imports, calls, or references something introduced in file B's diff
-- Removing either file's changes alone would cause a build error or runtime crash
-- The changes are two sides of the same contract (e.g. an interface and its implementation)
-
-**Files are separated when:**
-
-- A change is a standalone improvement (rename, format, lint fix) that works independently
-- Infrastructure/config changes don't depend on feature code in the same diff
-- A generic utility refactor happens to be used by a new feature, but works on its own
-- A large feature can be split into layers (e.g. data model, then service, then route) where each layer compiles on its own
-
-### What to expect
-
-| Scenario | Result |
-| --- | --- |
-| New route + new service it imports | **One commit** — they depend on each other, and are small enough to review together |
-| Unrelated date-format refactor + new user endpoint | **Two commits** — each compiles and runs without the other; reviewer sees each change clearly |
-| Feature files (route, controller, service) + tests | **One commit** — reviewer benefits from seeing implementation and tests together; tests alone don't break production if reverted |
-| Large feature with independent layers | **Multiple commits** — split by layer (model → service → route) so reviewers see each concern separately |
-| `package.json` change + lockfile | **One commit** — lockfile is a side effect of the dependency change |
-| Migration + schema/model change | **One commit** — the migration only makes sense alongside the schema it supports |
-| README or docs update | **Separate commit** — always independent |
+When Linear context is available, the AI uses the issue title, description, and labels to better understand the intent of your changes.
 
 ### Fallback
 
@@ -140,18 +173,59 @@ If AI is unavailable, heuristic groups from Pass 1 are used directly with auto-g
 
 ## Code Review
 
-| Tool       | Command                     | Type       |
-| ---------- | --------------------------- | ---------- |
-| CodeRabbit | `coderabbit review --plain` | Local      |
-| Devin      | `npx devin-review`          | Local      |
-| Codex      | `codex exec`                | Local      |
-| Graphite   | `gt stack submit --draft`   | Push-based |
+| Tool       | Status       | Notes                                                              |
+| ---------- | ------------ | ------------------------------------------------------------------ |
+| Graphite   | Recommended  | Uses `gt` CLI — install with `npm i -g @withgraphite/graphite-cli` |
+| CodeRabbit | Experimental | Requires CLI or API key                                            |
+| Codex      | Experimental | Uses your `OPENAI_API_KEY`                                         |
+| Devin      | Experimental | Limited access, invite-only                                        |
 
 Findings are normalized with severity levels (`critical`, `warning`, `info`). Critical findings block the push by default.
 
 ## Configuration
 
-Create a `.gitshiprc.json` in your project root, or use `gitship.config.js`, or a `"gitship"` key in `package.json`. On first run, if no config exists, git-ship prompts for preferences and creates one automatically.
+### Global Configuration
+
+Stored at `~/.config/gitship/config.json`. Created automatically by the setup wizard. Works across all repos.
+
+```bash
+gs --setup  # Re-run setup wizard anytime
+```
+
+### API Key Storage
+
+API keys are stored in your shell profile for security and persistence:
+
+| Shell | Profile Location             |
+| ----- | ---------------------------- |
+| zsh   | `~/.zshrc`                   |
+| bash  | `~/.bashrc`                  |
+| fish  | `~/.config/fish/config.fish` |
+
+The setup wizard automatically detects your shell and adds keys in the correct format. If a key already exists, you'll be asked whether to use the existing key or update it.
+
+After adding new keys, run `source ~/.zshrc` (or your shell's profile) to use them in the current terminal session.
+
+### Per-Repository Setup
+
+The first time you run `git-ship` in a new repository, you'll see:
+
+```
+First time using git-ship in this repository.
+
+? How would you like to configure this repository?
+> Use global config (recommended)
+  Customize for this repo
+  Skip for now
+```
+
+- **Use global config** — Creates a minimal `.gitshiprc.json` that references your global settings. The prompt won't appear again.
+- **Customize for this repo** — Launches a wizard to override specific settings (AI provider, review tool, commit length, etc.)
+- **Skip for now** — Uses global config for this run, but you'll be prompted again next time.
+
+### Local Configuration (per-repo)
+
+Create a `.gitshiprc.json` in your project root to override global settings:
 
 ```json
 {
@@ -164,7 +238,8 @@ Create a `.gitshiprc.json` in your project root, or use `gitship.config.js`, or 
   },
   "review": {
     "enabled": true,
-    "tool": "coderabbit"
+    "tool": "graphite",
+    "transport": "cli"
   },
   "commits": {
     "conventional": true,
@@ -182,43 +257,62 @@ Create a `.gitshiprc.json` in your project root, or use `gitship.config.js`, or 
     "includeIssueRef": true,
     "maxMessageLength": 72
   },
-  "ignorePatterns": ["node_modules/**", ".env*", "dist/**", ".DS_Store"],
+  "ignorePatterns": [
+    "node_modules/**",
+    ".env*",
+    "dist/**",
+    ".DS_Store",
+    ".gitshiprc.json"
+  ],
   "branch": {
     "teamPrefixes": ["ENG", "DES"]
   }
 }
 ```
 
+### Config Precedence
+
+```
+CLI flags (--review-tool, --issue, etc.)
+    ↓
+Environment variables (GITSHIP_*)
+    ↓
+Local config (.gitshiprc.json)
+    ↓
+Global config (~/.config/gitship/config.json)
+    ↓
+Defaults
+```
+
 ### Environment Variables
 
-git-ship loads `.env` from your project root automatically, so you can set API keys there instead of exporting them.
-
-```env
-# .env
-OPENAI_API_KEY=sk-...
-GITSHIP_AI_PROVIDER=anthropic
-GITSHIP_AI_MODEL=claude-sonnet-4-20250514
-```
+git-ship loads `.env` from your project root automatically.
 
 **API keys:**
 
-| Variable            | Description                                           |
-| ------------------- | ----------------------------------------------------- |
-| `LINEAR_API_KEY`    | Linear workspace API key                              |
-| `OPENAI_API_KEY`    | OpenAI API key                                        |
-| `ANTHROPIC_API_KEY` | Anthropic API key                                     |
-| `GEMINI_API_KEY`    | Google Gemini API key (also accepts `GOOGLE_API_KEY`) |
+| Variable             | Description                                           |
+| -------------------- | ----------------------------------------------------- |
+| `LINEAR_API_KEY`     | Linear workspace API key                              |
+| `OPENAI_API_KEY`     | OpenAI API key                                        |
+| `ANTHROPIC_API_KEY`  | Anthropic API key                                     |
+| `GEMINI_API_KEY`     | Google Gemini API key (also accepts `GOOGLE_API_KEY`) |
+| `CODERABBIT_API_KEY` | CodeRabbit API key (optional)                         |
+| `DEVIN_API_KEY`      | Devin API key (optional)                              |
 
 **Config overrides:**
 
-| Variable                    | Values                                                       |
-| --------------------------- | ------------------------------------------------------------ |
-| `GITSHIP_AI_PROVIDER`       | `openai`, `anthropic`, `gemini`                              |
-| `GITSHIP_AI_MODEL`          | Any model string (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
-| `GITSHIP_LINEAR_TRANSPORT`  | `graphql`, `mcp`                                             |
-| `GITSHIP_REVIEW_TOOL`       | `coderabbit`, `devin`, `codex`, `graphite`                   |
-| `GITSHIP_REVIEW_ENABLED`    | `true`, `false`                                              |
-| `GITSHIP_COMMIT_MAX_LENGTH` | `20` – `200`                                                 |
+| Variable                      | Values                                                       |
+| ----------------------------- | ------------------------------------------------------------ |
+| `GITSHIP_AI_PROVIDER`         | `openai`, `anthropic`, `gemini`                              |
+| `GITSHIP_AI_MODEL`            | Any model string (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
+| `GITSHIP_LINEAR_TRANSPORT`    | `graphql`, `mcp`                                             |
+| `GITSHIP_REVIEW_TOOL`         | `coderabbit`, `devin`, `codex`, `graphite`                   |
+| `GITSHIP_REVIEW_ENABLED`      | `true`, `false`                                              |
+| `GITSHIP_REVIEW_TRANSPORT`    | `mcp`, `cli`                                                 |
+| `GITSHIP_COMMIT_MAX_LENGTH`   | `20` – `200`                                                 |
+| `GITSHIP_DEVIN_ENDPOINT`      | Custom MCP endpoint for Devin                                |
+| `GITSHIP_CODERABBIT_ENDPOINT` | Custom MCP endpoint for CodeRabbit                           |
+| `GITSHIP_CODEX_ENDPOINT`      | Custom MCP endpoint for Codex                                |
 
 ## Graceful Degradation
 
