@@ -31,7 +31,7 @@ import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEdit
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError } from './utils/errors.js';
-import { checkForUpdate, displayUpdateBanner } from './utils/update-check.js';
+import { createUpdateChecker, displayUpdateBanner, displayUpdateNotification, type UpdateChecker } from './utils/update-check.js';
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json');
@@ -87,6 +87,8 @@ async function ship(options: {
   reviewTool?: string;
   noReview?: boolean;
   issue?: string;
+  updateChecker?: UpdateChecker;
+  updateShownAtStart?: boolean;
 }): Promise<void> {
   if (options.verbose) setLogLevel('debug');
 
@@ -323,6 +325,15 @@ async function ship(options: {
   if (pushResult.success) {
     logger.success(`Pushed to ${pushResult.remote}/${pushResult.branch}`);
   }
+
+  // Show update notification at the end if it wasn't shown at start
+  if (!options.updateShownAtStart && options.updateChecker) {
+    const deferredUpdate = options.updateChecker.getResult();
+    if (deferredUpdate) {
+      console.log(); // Add spacing
+      displayUpdateNotification(VERSION, deferredUpdate);
+    }
+  }
 }
 
 // ─── CLI Setup ───
@@ -371,10 +382,16 @@ More info: https://github.com/thisismayank/git-ship
         return;
       }
 
-      // Check for updates before starting the workflow
-      const latest = await checkForUpdate(VERSION).catch(() => null);
+      // Start update check immediately (non-blocking)
+      const updateChecker = createUpdateChecker(VERSION);
+
+      // Wait up to 300ms for the check to complete
+      let updateShownAtStart = false;
+      const latest = await updateChecker.wait(300);
+
       if (latest) {
         displayUpdateBanner(VERSION, latest);
+        updateShownAtStart = true;
         const action = await select({
           message: 'A new version is available. What would you like to do?',
           choices: [
@@ -389,7 +406,7 @@ More info: https://github.com/thisismayank/git-ship
         }
       }
 
-      await ship(options);
+      await ship({ ...options, updateChecker, updateShownAtStart });
     } catch (error) {
       if (error instanceof GitShipError) {
         logger.error(error.message);
