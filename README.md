@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">git-ship</h1>
   <p align="center">
-    AI-powered git workflow that turns your messy changes into clean, grouped, conventional commits — then reviews and pushes them.
+    AI-powered git workflow that turns your messy changes into clean, grouped, conventional commits — then reviews, pushes, and creates a pull request.
     <br />
     One command: <code>git-ship</code>
   </p>
@@ -17,6 +17,26 @@
 ---
 
 Stop writing commit messages. `git-ship` reads your diffs, groups related changes into logical commits, writes conventional commit messages using AI, runs a code review, and pushes — all in one command.
+
+## Table of Contents
+
+- [Why I Built This](#why-i-built-this)
+- [How It Works](#how-it-works)
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Configuration Commands](#configuration-commands)
+- [What Makes It Different](#what-makes-it-different)
+- [Issue Tracker Integration](#issue-tracker-integration)
+- [Commit Message Structure](#commit-message-structure)
+- [Branch Parsing](#branch-parsing)
+- [Commit Grouping](#commit-grouping)
+- [Code Review](#code-review)
+- [Pull Request Creation](#pull-request-creation)
+- [Configuration](#configuration)
+- [Graceful Degradation](#graceful-degradation)
+- [Requirements](#requirements)
+- [License](#license)
 
 ## Why I Built This
 
@@ -37,13 +57,14 @@ Now I run `gs`, review the plan, and hit enter. Clean history, every time.
 ```
 $ git-ship
 
-[1/7] Detect branch        → parse issue ID from branch name (e.g., feat/ENG-123-...)
-[2/7] Fetch issue context  → pull from Linear, Jira, Asana, or enter plain text
-[3/7] Collect changes      → structured diffs for all changed files
-[4/7] Group into commits   → heuristic pre-group, then AI refines into revertable commits
-[5/7] Review commit plan   → accept / edit messages / regroup / cancel
-[6/7] Code review          → CodeRabbit, Devin, Codex, or Graphite
-[7/7] Push to remote
+[1/8] Detect branch        → parse issue ID from branch name (e.g., feat/ENG-123-...)
+[2/8] Fetch issue context  → pull from Linear, Jira, Asana, or enter plain text
+[3/8] Collect changes      → structured diffs for all changed files
+[4/8] Group into commits   → heuristic pre-group, then AI refines into revertable commits
+[5/8] Review commit plan   → accept / edit messages / regroup / cancel
+[6/8] Code review          → CodeRabbit, Devin, Codex, or Graphite
+[7/8] Push to remote
+[8/8] Create pull request  → AI-generated PR with summary, problem, solution, impact
 ```
 
 You stay in control. Every step is interactive — review the plan, edit messages, regroup files, or cancel at any point.
@@ -94,6 +115,8 @@ gs --issue ENG-123    # Manually specify issue ID
 gs --setup            # Re-run setup wizard
 gs config             # View current configuration
 gs config set <key> <value>  # Update a specific setting
+gs pr                 # Create a PR for the current branch
+gs pr --draft         # Create as draft PR
 ```
 
 | Flag                   | Description                                                       |
@@ -130,16 +153,16 @@ gs config path
 
 ### Available Config Keys
 
-| Key                     | Values                                    | Description                    |
-| ----------------------- | ----------------------------------------- | ------------------------------ |
-| `commits.headerLength`  | `20` - `200`                              | Max commit header length       |
-| `commits.conventional`  | `true`, `false`                           | Use conventional commits       |
-| `commits.includeIssueRef` | `true`, `false`                         | Include issue ref in commits   |
-| `issueTracker.provider` | `linear`, `jira`, `asana`, `plain`, `none`| Issue tracker to use           |
-| `ai.provider`           | `openai`, `anthropic`, `gemini`           | AI provider for analysis       |
-| `ai.model`              | Model name string                         | AI model to use                |
-| `review.enabled`        | `true`, `false`                           | Enable code review             |
-| `review.tool`           | `coderabbit`, `devin`, `codex`, `graphite`| Code review tool               |
+| Key                       | Values                                     | Description                  |
+| ------------------------- | ------------------------------------------ | ---------------------------- |
+| `commits.headerLength`    | `20` - `200`                               | Max commit header length     |
+| `commits.conventional`    | `true`, `false`                            | Use conventional commits     |
+| `commits.includeIssueRef` | `true`, `false`                            | Include issue ref in commits |
+| `issueTracker.provider`   | `linear`, `jira`, `asana`, `plain`, `none` | Issue tracker to use         |
+| `ai.provider`             | `openai`, `anthropic`, `gemini`            | AI provider for analysis     |
+| `ai.model`                | Model name string                          | AI model to use              |
+| `review.enabled`          | `true`, `false`                            | Enable code review           |
+| `review.tool`             | `coderabbit`, `devin`, `codex`, `graphite` | Code review tool             |
 
 ## What Makes It Different
 
@@ -341,6 +364,79 @@ If AI is unavailable or you choose to continue without it, heuristic groups from
 
 Findings are normalized with severity levels (`critical`, `warning`, `info`). Critical findings block the push by default.
 
+## Pull Request Creation
+
+After pushing, git-ship can create a pull request with an AI-generated description that follows industry standards.
+
+### Automatic PR (after push)
+
+At the end of the `gs` workflow, you'll be prompted:
+
+```
+? Create a pull request? Yes
+? PR title: feat(auth): add OAuth2 authentication
+✓ Generating PR description with AI
+? Edit PR description before creating? No
+? Create as draft PR? No
+✓ Pull request created: https://github.com/user/repo/pull/123
+```
+
+### Standalone PR Command
+
+Create a PR anytime for your current branch:
+
+```bash
+gs pr                    # Interactive PR creation
+gs pr --draft            # Create as draft
+gs pr --title "My PR"    # Set title directly
+gs pr --base develop     # Target a different base branch
+```
+
+### AI-Generated PR Description
+
+The PR description is generated using your configured AI provider and includes:
+
+```markdown
+## Summary
+
+Brief 2-3 sentence overview of what this PR does and why.
+
+## Problem
+
+What problem, issue, or requirement does this PR address?
+
+## Solution
+
+How does this PR solve the problem? High-level approach.
+
+## Changes Made
+
+- Key changes organized logically (not just a commit dump)
+- Grouped by feature or component
+
+## Impact
+
+What parts of the system are affected? Breaking changes?
+
+## Testing
+
+How was this tested? What should reviewers verify?
+
+## Additional Context
+
+Any other information reviewers should know.
+```
+
+### GitHub CLI (Optional)
+
+For automatic PR creation:
+
+- **GitHub CLI (`gh`)** must be installed: `brew install gh`
+- Visit https://cli.github.com/ for other operating systems
+- Must be authenticated: `gh auth login`
+
+**If `gh` is not available**, git-ship will still generate the PR description and display it for you to copy-paste when creating the PR manually on GitHub.
+
 ## Configuration
 
 ### Global Configuration
@@ -488,13 +584,13 @@ git-ship loads `.env` from your project root automatically.
 
 git-ship is designed to work even when things fail:
 
-| Failure              | Behavior                                              |
-| -------------------- | ----------------------------------------------------- |
-| Issue tracker fails  | Warns, proceeds without issue context                 |
-| AI provider fails    | Shows error, offers retry/continue/cancel             |
-| Review tool missing  | Warns, offers to skip                                 |
-| Push rejected        | Shows error with suggested fix                        |
-| No changes           | Clean exit with info message                          |
+| Failure             | Behavior                                  |
+| ------------------- | ----------------------------------------- |
+| Issue tracker fails | Warns, proceeds without issue context     |
+| AI provider fails   | Shows error, offers retry/continue/cancel |
+| Review tool missing | Warns, offers to skip                     |
+| Push rejected       | Shows error with suggested fix            |
+| No changes          | Clean exit with info message              |
 
 ## Requirements
 
