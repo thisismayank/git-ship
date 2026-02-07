@@ -33,6 +33,7 @@ import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError, AIError } from './utils/errors.js';
 import { createUpdateChecker, displayUpdateBanner, displayUpdateNotification, type UpdateChecker } from './utils/update-check.js';
+import { getLastSeenVersion, setLastSeenVersion, getWhatsNewSinceVersion, displayWhatsNew, getUpdateTeaser } from './utils/whats-new.js';
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json');
@@ -571,6 +572,17 @@ More info: https://github.com/thisismayank/git-ship
         return;
       }
 
+      // Check if we just updated - show "What's New" once
+      const lastSeenVersion = await getLastSeenVersion();
+      if (lastSeenVersion !== VERSION) {
+        const newReleases = getWhatsNewSinceVersion(lastSeenVersion, VERSION);
+        if (newReleases.length > 0 && lastSeenVersion !== null) {
+          // Only show if user has used git-ship before (not first time)
+          displayWhatsNew(newReleases);
+        }
+        await setLastSeenVersion(VERSION);
+      }
+
       // Start update check immediately (non-blocking)
       const updateChecker = createUpdateChecker(VERSION);
 
@@ -580,6 +592,12 @@ More info: https://github.com/thisismayank/git-ship
 
       if (latest) {
         displayUpdateBanner(VERSION, latest);
+        // Show teaser of what's in the new version
+        const teaser = getUpdateTeaser(latest);
+        if (teaser) {
+          console.log(chalk.cyan(`  ${teaser}`));
+          console.log();
+        }
         updateShownAtStart = true;
         const action = await select({
           message: 'A new version is available. What would you like to do?',
@@ -988,6 +1006,166 @@ program
         process.exit(1);
       }
       throw error;
+    }
+  });
+
+// ─── Release Subcommand ───
+program
+  .command('release')
+  .description('Create a GitHub release with AI-generated notes')
+  .option('-v, --version <version>', 'Version to release (defaults to package.json version)')
+  .option('--draft', 'Create as draft release')
+  .option('--dry-run', 'Generate notes without creating release')
+  .action(async (options) => {
+    try {
+      const { execSync } = await import('node:child_process');
+
+      // Get version from package.json or option
+      const releaseVersion = options.version || VERSION;
+
+      logger.info(`Preparing release v${releaseVersion}...`);
+
+      // Check if gh CLI is available
+      try {
+        execSync('gh auth status', { stdio: 'pipe' });
+      } catch {
+        logger.error('GitHub CLI not authenticated. Run: gh auth login');
+        process.exit(1);
+      }
+
+      // Get commits since last tag (or all commits if no tags)
+      let commits: string[] = [];
+      try {
+        const lastTag = execSync('git describe --tags --abbrev=0 2>/dev/null', {
+          encoding: 'utf-8',
+        }).trim();
+        const log = execSync(`git log ${lastTag}..HEAD --pretty=format:"%s|%b<<<END>>>"`, {
+          encoding: 'utf-8',
+        });
+        commits = log.split('<<<END>>>').filter(Boolean).map(c => c.trim());
+        logger.info(`Found ${commits.length} commits since ${lastTag}`);
+      } catch {
+        // No tags yet - get recent commits
+        const log = execSync('git log --oneline -30', { encoding: 'utf-8' });
+        commits = log.trim().split('\n');
+        logger.info(`No previous tags found. Using last ${commits.length} commits.`);
+      }
+
+      if (commits.length === 0) {
+        logger.warn('No commits found for release notes.');
+        process.exit(1);
+      }
+
+      // Load config for AI
+      const config = await loadConfig();
+
+      // Generate release notes using AI
+      const prompt = `Generate professional GitHub release notes for version ${releaseVersion} of git-ship (a CLI tool for AI-powered git workflow).
+
+Based on these commits:
+${commits.join('\n')}
+
+Format the release notes in markdown with:
+1. A brief intro (1-2 sentences)
+2. "## What's New" section with the major features/changes (use emojis)
+3. "## Improvements" section for smaller enhancements
+4. "## Bug Fixes" section if applicable
+5. "## Breaking Changes" section if applicable (only if there are actual breaking changes)
+
+Keep it concise and user-friendly. Focus on what users care about, not implementation details.
+Output ONLY the markdown, no preamble.`;
+
+      logger.info('Generating release notes with AI...');
+
+      const { generatePRBodyWithAI } = await import('./pr/index.js');
+
+      // Reuse the AI calling infrastructure
+      let releaseNotes: string;
+      const aiProvider = config.ai.provider;
+      const aiModel = config.ai.model;
+
+      if (aiProvider === 'openai') {
+        const OpenAI = (await import('openai')).default;
+        const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const response = await client.chat.completions.create({
+          model: aiModel,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          max_tokens: 1500,
+        });
+        releaseNotes = response.choices[0]?.message?.content ?? '';
+      } else if (aiProvider === 'anthropic') {
+        const Anthropic = (await import('@anthropic-ai/sdk')).default;
+        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+        const response = await client.messages.create({
+          model: aiModel,
+          max_tokens: 1500,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        const textBlock = response.content.find((b) => b.type === 'text');
+        releaseNotes = textBlock && 'text' in textBlock ? textBlock.text : '';
+      } else {
+        const { GoogleGenerativeAI } = await import('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+        const model = genAI.getGenerativeModel({ model: aiModel });
+        const result = await model.generateContent(prompt);
+        releaseNotes = result.response.text();
+      }
+
+      console.log('\n' + chalk.bold.cyan('─── Release Notes ───'));
+      console.log(releaseNotes);
+      console.log(chalk.bold.cyan('─────────────────────') + '\n');
+
+      if (options.dryRun) {
+        logger.info('Dry run - release not created.');
+        return;
+      }
+
+      // Create the release
+      const { confirm } = await import('@inquirer/prompts');
+      const shouldCreate = await confirm({
+        message: `Create GitHub release v${releaseVersion}?`,
+        default: true,
+      });
+
+      if (!shouldCreate) {
+        logger.info('Release cancelled.');
+        return;
+      }
+
+      // Write notes to temp file for gh CLI
+      const { writeFileSync, unlinkSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const notesFile = join(tmpdir(), `gitship-release-notes-${Date.now()}.md`);
+      writeFileSync(notesFile, releaseNotes, 'utf-8');
+
+      try {
+        const args = [
+          'gh', 'release', 'create',
+          `v${releaseVersion}`,
+          '--title', `v${releaseVersion}`,
+          '--notes-file', notesFile,
+        ];
+
+        if (options.draft) {
+          args.push('--draft');
+        }
+
+        execSync(args.join(' '), { stdio: 'inherit' });
+        logger.success(`Release v${releaseVersion} created!`);
+      } finally {
+        try {
+          unlinkSync(notesFile);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        logger.error(error.message);
+      }
+      process.exit(1);
     }
   });
 
