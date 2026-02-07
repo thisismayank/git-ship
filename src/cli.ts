@@ -27,7 +27,8 @@ import { CodexAdapter } from './review/codex.js';
 import { GraphiteAdapter } from './review/graphite.js';
 import { withSpinner } from './ui/spinner.js';
 import { displayIssueContext, displayCommitPlan, displayReviewResults, displayChangedFiles } from './ui/display.js';
-import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptAIFailureAction, promptPlainTextRequirements } from './ui/prompts.js';
+import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptAIFailureAction, promptPlainTextRequirements, promptCreatePR, promptPRTitle, promptPRDraft, promptEditPRBody, promptPRBodyEditor } from './ui/prompts.js';
+import { createPRAdapter, isPRSupported, generatePRTitle, generatePRBody, generatePRBodyWithAI } from './pr/index.js';
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError, AIError } from './utils/errors.js';
@@ -40,7 +41,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PACKAGE_ROOT = join(__dirname, '..');
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
 
 function displayReadme(): void {
   try {
@@ -423,6 +424,93 @@ async function ship(options: {
     logger.success(`Pushed to ${pushResult.remote}/${pushResult.branch}`);
   }
 
+  // ─── Step 8: Create Pull Request ───
+  logger.step(8, TOTAL_STEPS, 'Pull request...');
+
+  const prSupported = await isPRSupported();
+  if (prSupported) {
+    const wantPR = await promptCreatePR();
+
+    if (wantPR) {
+      const prAdapter = createPRAdapter();
+      if (prAdapter) {
+        const baseBranch = await prAdapter.getDefaultBaseBranch();
+
+        // Generate PR title and body using AI
+        const defaultTitle = generatePRTitle(issueContext, groups);
+        const prTitle = await promptPRTitle(defaultTitle);
+
+        const prBody = await withSpinner(
+          'Generating PR description with AI',
+          () => generatePRBodyWithAI({
+            issue: issueContext,
+            commits: groups,
+            branchName,
+            baseBranch,
+            config,
+          }),
+        );
+
+        // Ask if user wants to edit the body
+        const wantEdit = await promptEditPRBody();
+        const finalBody = wantEdit ? await promptPRBodyEditor(prBody) : prBody;
+
+        // Ask if draft
+        const isDraft = await promptPRDraft();
+
+        // Create the PR
+        const prResult = await withSpinner(
+          'Creating pull request',
+          () => prAdapter.createPR({
+            title: prTitle,
+            body: finalBody,
+            baseBranch,
+            headBranch: branchName,
+            isDraft,
+          }),
+        );
+
+        if (prResult.success && prResult.url) {
+          logger.success(`Pull request created: ${chalk.cyan.underline(prResult.url)}`);
+        } else if (prResult.error) {
+          logger.warn(`Could not create PR: ${prResult.error}`);
+        }
+      }
+    } else {
+      logger.info(chalk.dim('Skipped PR creation.'));
+    }
+  } else {
+    // gh CLI not available - offer to generate PR description for manual copy
+    logger.warn('GitHub CLI (gh) not found. Cannot create PR automatically.');
+    logger.info(chalk.dim('Install with: brew install gh (or visit https://cli.github.com)'));
+
+    const wantDescription = await promptCreatePR();
+    if (wantDescription) {
+      const baseBranch = 'main'; // Default assumption
+
+      const prBody = await withSpinner(
+        'Generating PR description with AI',
+        () => generatePRBodyWithAI({
+          issue: issueContext,
+          commits: groups,
+          branchName,
+          baseBranch,
+          config,
+        }),
+      );
+
+      const defaultTitle = generatePRTitle(issueContext, groups);
+
+      console.log('\n' + chalk.bold.cyan('─── PR Title ───'));
+      console.log(defaultTitle);
+      console.log('\n' + chalk.bold.cyan('─── PR Description (copy this) ───'));
+      console.log(prBody);
+      console.log(chalk.bold.cyan('─────────────────────────────────') + '\n');
+
+      logger.info(`Create your PR manually at: ${chalk.cyan('https://github.com/<owner>/<repo>/compare/' + branchName)}`);
+    }
+  }
+
   // Show update notification at the end if it wasn't shown at start
   if (!options.updateShownAtStart && options.updateChecker) {
     const deferredUpdate = options.updateChecker.getResult();
@@ -697,5 +785,210 @@ configCmd.action(async () => {
   // Run 'show' by default
   await configCmd.commands.find(c => c.name() === 'show')?.parseAsync([]);
 });
+
+// ─── PR Subcommand ───
+program
+  .command('pr')
+  .description('Create a pull request for the current branch')
+  .option('-d, --draft', 'Create as draft PR')
+  .option('-t, --title <title>', 'PR title (defaults to branch/issue name)')
+  .option('-b, --base <branch>', 'Base branch (defaults to main/master)')
+  .action(async (options) => {
+    try {
+      const git = createGit();
+
+      // Check if we're in a git repo
+      if (!(await isGitRepository(git))) {
+        logger.error('Not a git repository');
+        process.exit(1);
+      }
+
+      // Check if PR creation is supported (gh CLI available)
+      const prSupported = await isPRSupported();
+      const prAdapter = prSupported ? createPRAdapter() : null;
+
+      // Get current branch
+      const status = await getStatus(git);
+      const branchName = status.branch;
+
+      // Determine base branch
+      let baseBranch = options.base || 'main';
+      if (prAdapter) {
+        baseBranch = options.base || await prAdapter.getDefaultBaseBranch();
+      }
+
+      logger.info(`Creating PR: ${chalk.cyan(branchName)} → ${chalk.cyan(baseBranch)}`);
+
+      // Load config for issue tracking
+      const config = await loadConfig();
+
+      // Try to get issue context
+      let issueContext: IssueContext | null = null;
+      const needsIssueFetch = requiresIssueFetch(config);
+
+      if (needsIssueFetch) {
+        const parsed = parseBranch(branchName, config.branch.teamPrefixes);
+        if (parsed.issueId) {
+          const issueClient = createIssueTrackerClient(config);
+          if (issueClient) {
+            try {
+              issueContext = await withSpinner(
+                `Fetching issue ${parsed.issueId}`,
+                () => issueClient.getIssue(parsed.issueId!),
+              );
+            } catch {
+              logger.warn(`Could not fetch issue ${parsed.issueId}`);
+            }
+          }
+        }
+      }
+
+      // Get commits on this branch with full details
+      const { execSync } = await import('node:child_process');
+      const commitGroups: CommitGroup[] = [];
+
+      try {
+        // Get commit hashes
+        const hashLog = execSync(`git log ${baseBranch}..HEAD --pretty=format:"%H"`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        const hashes = hashLog.trim().split('\n').filter(Boolean);
+
+        for (const hash of hashes) {
+          // Get full commit message
+          const fullMessage = execSync(`git log -1 ${hash} --pretty=format:"%B"`, {
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
+
+          // Get files changed in this commit
+          const filesOutput = execSync(`git diff-tree --no-commit-id --name-only -r ${hash}`, {
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          const files = filesOutput.trim().split('\n').filter(Boolean);
+
+          // Parse the commit message
+          const lines = fullMessage.split('\n');
+          const subjectLine = lines[0] || '';
+
+          // Parse conventional commit header
+          const headerMatch = subjectLine.match(/^(\w+)(?:\(([^)]+)\))?: (.+)$/);
+          const type = headerMatch ? headerMatch[1] : 'chore';
+          const scope = headerMatch ? (headerMatch[2] || 'misc') : 'misc';
+          const summary = headerMatch ? headerMatch[3] : subjectLine;
+
+          // Extract body (everything between header and footer)
+          let body: string | undefined;
+          let addresses: string | undefined;
+
+          // Find body content (skip empty lines after header)
+          const bodyLines: string[] = [];
+          let inBody = false;
+          for (let i = 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (!inBody && line.trim() === '') continue; // Skip empty lines at start
+            if (line.startsWith('Addresses:')) {
+              addresses = line.replace('Addresses:', '').trim();
+              continue;
+            }
+            if (line.startsWith('Refs:')) continue; // Skip refs line
+            if (line.startsWith('Co-Authored-By:')) continue; // Skip co-author
+            inBody = true;
+            bodyLines.push(line);
+          }
+
+          // Clean up trailing empty lines from body
+          while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1].trim() === '') {
+            bodyLines.pop();
+          }
+
+          if (bodyLines.length > 0) {
+            body = bodyLines.join('\n');
+          }
+
+          commitGroups.push({
+            files,
+            type,
+            scope,
+            summary,
+            body,
+            addresses,
+            rationale: '',
+          });
+        }
+      } catch {
+        // Branch might not have diverged yet or other git error
+      }
+
+      // Reverse to show oldest commits first (chronological order)
+      commitGroups.reverse();
+
+      // Generate title
+      const defaultTitle = options.title || generatePRTitle(issueContext, commitGroups);
+      const prTitle = await promptPRTitle(defaultTitle);
+
+      // Generate body using AI
+      const prBody = await withSpinner(
+        'Generating PR description with AI',
+        () => generatePRBodyWithAI({
+          issue: issueContext,
+          commits: commitGroups,
+          branchName,
+          baseBranch,
+          config,
+        }),
+      );
+
+      // Ask if user wants to edit
+      const wantEdit = await promptEditPRBody();
+      const finalBody = wantEdit ? await promptPRBodyEditor(prBody) : prBody;
+
+      if (prAdapter) {
+        // gh CLI available - create PR automatically
+        const isDraft = options.draft || await promptPRDraft();
+
+        const prResult = await withSpinner(
+          'Creating pull request',
+          () => prAdapter.createPR({
+            title: prTitle,
+            body: finalBody,
+            baseBranch,
+            headBranch: branchName,
+            isDraft,
+          }),
+        );
+
+        if (prResult.success && prResult.url) {
+          logger.success(`Pull request created: ${chalk.cyan.underline(prResult.url)}`);
+        } else if (prResult.error) {
+          logger.error(`Could not create PR: ${prResult.error}`);
+          process.exit(1);
+        }
+      } else {
+        // gh CLI not available - show PR description for manual copy
+        logger.warn('GitHub CLI (gh) not found. Cannot create PR automatically.');
+        logger.info(chalk.dim('Install with: brew install gh (or visit https://cli.github.com)\n'));
+
+        console.log(chalk.bold.cyan('─── PR Title ───'));
+        console.log(prTitle);
+        console.log('\n' + chalk.bold.cyan('─── PR Description (copy this) ───'));
+        console.log(finalBody);
+        console.log(chalk.bold.cyan('─────────────────────────────────') + '\n');
+
+        logger.info(`Create your PR manually at: ${chalk.cyan(`https://github.com/<owner>/<repo>/compare/${branchName}`)}`);
+      }
+    } catch (error) {
+      if (error instanceof GitShipError) {
+        logger.error(error.message);
+        if (error.suggestion) {
+          logger.info(chalk.dim(`Suggestion: ${error.suggestion}`));
+        }
+        process.exit(1);
+      }
+      throw error;
+    }
+  });
 
 program.parse();

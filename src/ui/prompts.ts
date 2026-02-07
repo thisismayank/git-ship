@@ -174,3 +174,43 @@ export async function promptPlainTextRequirements(): Promise<string | null> {
 
   return cleanedRequirements || null;
 }
+
+export async function promptCreatePR(): Promise<boolean> {
+  return confirm({
+    message: "Create a pull request?",
+    default: true,
+  });
+}
+
+export async function promptPRTitle(defaultTitle: string): Promise<string> {
+  return input({
+    message: "PR title:",
+    default: defaultTitle,
+    validate: (val) =>
+      val.trim().length > 0 ? true : "Title cannot be empty",
+  });
+}
+
+export async function promptPRDraft(): Promise<boolean> {
+  return confirm({
+    message: "Create as draft PR?",
+    default: false,
+  });
+}
+
+export async function promptEditPRBody(): Promise<boolean> {
+  return confirm({
+    message: "Edit PR description before creating?",
+    default: false,
+  });
+}
+
+export async function promptPRBodyEditor(defaultBody: string): Promise<string> {
+  console.log("\n  Opening editor for PR description...\n");
+
+  return editor({
+    message: "Edit PR description:",
+    default: defaultBody,
+    postfix: ".md",
+  });
+}
