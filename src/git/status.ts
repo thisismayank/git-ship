@@ -45,6 +45,15 @@ export function createGit(cwd?: string): SimpleGit {
   return simpleGit(cwd);
 }
 
+export async function isGitRepository(git: SimpleGit): Promise<boolean> {
+  try {
+    await git.revparse(['--is-inside-work-tree']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function getStatus(git: SimpleGit): Promise<GitStatus> {
   try {
     const status = await git.status();

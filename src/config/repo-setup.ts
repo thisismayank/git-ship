@@ -133,21 +133,77 @@ export async function runRepoSetupWizard(): Promise<void> {
     };
   }
 
-  // Team prefixes
-  const customizeBranch = await confirm({
-    message: 'Customize branch parsing settings?',
+  // Issue Tracker Integration
+  const customizeIssueTracker = await confirm({
+    message: 'Customize issue tracker settings for this repo?',
     default: false,
   });
 
-  if (customizeBranch) {
-    const prefixesInput = await input({
-      message: 'Team prefixes (comma-separated, e.g., ENG,DES,PROD):',
-      default: 'ENG,DES',
+  if (customizeIssueTracker) {
+    const issueProvider = await select({
+      message: 'Issue tracker for this repo:',
+      default: globalConfig?.issueTracker?.provider ?? 'none',
+      choices: [
+        {
+          name: 'Linear',
+          value: 'linear' as const,
+          description: 'Fetches issue context from Linear',
+        },
+        {
+          name: 'Jira (Experimental)',
+          value: 'jira' as const,
+          description: 'Fetches issue context from Jira',
+        },
+        {
+          name: 'Asana (Experimental)',
+          value: 'asana' as const,
+          description: 'Fetches issue context from Asana',
+        },
+        {
+          name: 'Plain Text',
+          value: 'plain' as const,
+          description: 'Enter requirements manually at commit time',
+        },
+        {
+          name: 'None',
+          value: 'none' as const,
+          description: 'Basic commits without issue context',
+        },
+      ],
     });
 
-    overrides.branch = {
-      teamPrefixes: prefixesInput.split(',').map((p) => p.trim().toUpperCase()),
-    };
+    overrides.issueTracker = { provider: issueProvider };
+
+    // Show warning for 'none' selection
+    if (issueProvider === 'none') {
+      console.log(chalk.yellow('\n⚠️  Without issue tracking, commits will be simpler:\n'));
+      console.log(chalk.dim('  With context:    feat(auth): add OAuth2 login flow'));
+      console.log(chalk.dim('                   Implements social login with Google/GitHub providers'));
+      console.log(chalk.dim('                   Addresses: User authentication requirements\n'));
+      console.log(chalk.dim('  Without context: feat(auth): update auth files\n'));
+    }
+
+    // Only ask for team prefixes if using an external issue tracker
+    if (['linear', 'jira', 'asana'].includes(issueProvider)) {
+      const prefixesInput = await input({
+        message: 'Team prefixes for branch parsing (comma-separated, e.g., ENG,DES,PROD):',
+        default: globalConfig?.branch?.teamPrefixes?.join(',') ?? 'ENG,DES',
+      });
+
+      overrides.branch = {
+        teamPrefixes: prefixesInput.split(',').map((p) => p.trim().toUpperCase()),
+      };
+
+      // Provider-specific setup hints
+      if (issueProvider === 'jira') {
+        console.log(chalk.dim('\nNote: Set JIRA_API_TOKEN and JIRA_USER_EMAIL in your environment.'));
+        console.log(chalk.dim('You can also run "gs config set jira.baseUrl https://your-domain.atlassian.net"'));
+      } else if (issueProvider === 'asana') {
+        console.log(chalk.dim('\nNote: Set ASANA_ACCESS_TOKEN in your environment.'));
+      } else if (issueProvider === 'linear') {
+        console.log(chalk.dim('\nNote: Ensure LINEAR_API_KEY is set in your environment.'));
+      }
+    }
   }
 
   // Write local config
