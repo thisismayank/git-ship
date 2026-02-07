@@ -38,11 +38,11 @@ Now I run `gs`, review the plan, and hit enter. Clean history, every time.
 $ git-ship
 
 [1/7] Detect branch        → parse issue ID from branch name (e.g., feat/ENG-123-...)
-[2/7] Fetch Linear context  → pull issue title, description, labels
-[3/7] Collect changes       → structured diffs for all changed files
-[4/7] Group into commits    → heuristic pre-group, then AI refines into revertable commits
-[5/7] Review commit plan    → accept / edit messages / regroup / cancel
-[6/7] Code review           → CodeRabbit, Devin, Codex, or Graphite
+[2/7] Fetch issue context  → pull from Linear, Jira, Asana, or enter plain text
+[3/7] Collect changes      → structured diffs for all changed files
+[4/7] Group into commits   → heuristic pre-group, then AI refines into revertable commits
+[5/7] Review commit plan   → accept / edit messages / regroup / cancel
+[6/7] Code review          → CodeRabbit, Devin, Codex, or Graphite
 [7/7] Push to remote
 ```
 
@@ -67,16 +67,18 @@ Welcome to git-ship! Let's set up your configuration.
    → Choose OpenAI, Anthropic, or Gemini
    → Enter your API key (saved to shell profile)
 
-2. Linear Integration
-   → Connect Linear for issue context (optional)
-   → Validate connection
-   → Configure team prefixes (e.g., ENG, DES)
+2. Issue Tracker Integration
+   → Linear (recommended) - automatic issue fetching
+   → Jira (experimental) - requires base URL and API token
+   → Asana (experimental) - requires access token
+   → Plain Text - enter requirements manually each time
+   → None - commits based on diffs only
 
 3. Code Review Tool (Optional)
    → Choose Graphite, CodeRabbit, Codex, Devin, or skip
 
 4. Commit Settings
-   → Max commit message length
+   → Max commit header length (body has no limit)
 ```
 
 Configuration is saved globally (`~/.config/gitship/config.json`) and works across all repos.
@@ -86,12 +88,12 @@ Configuration is saved globally (`~/.config/gitship/config.json`) and works acro
 ```bash
 git-ship              # Full interactive flow
 gs                    # Shorthand alias
-git-ship --dry-run    # Preview commit plan without executing
-git-ship --no-review  # Skip code review
-git-ship --issue ENG-123  # Manually specify Linear issue
-git-ship --setup      # Re-run setup wizard to update configuration
-git-ship --help       # Show all available commands
-git-ship --readme     # Display full documentation
+gs --dry-run          # Preview commit plan without executing
+gs --no-review        # Skip code review
+gs --issue ENG-123    # Manually specify issue ID
+gs --setup            # Re-run setup wizard
+gs config             # View current configuration
+gs config set <key> <value>  # Update a specific setting
 ```
 
 | Flag                   | Description                                                       |
@@ -101,24 +103,162 @@ git-ship --readme     # Display full documentation
 | `-v, --verbose`        | Enable debug logging                                              |
 | `--review-tool <tool>` | Override review tool (`coderabbit`, `devin`, `codex`, `graphite`) |
 | `--no-review`          | Skip code review                                                  |
-| `-i, --issue <id>`     | Manually specify Linear issue ID                                  |
+| `-i, --issue <id>`     | Manually specify issue ID                                         |
 | `--setup`              | Re-run setup wizard to update API keys or configuration           |
 | `--readme`             | Display the full README documentation in terminal                 |
+
+## Configuration Commands
+
+Quickly view or update settings without re-running the full setup wizard:
+
+```bash
+# View current configuration
+gs config
+gs config show
+gs config show --json
+
+# Update specific settings
+gs config set commits.headerLength 50
+gs config set ai.provider anthropic
+gs config set ai.model claude-sonnet-4-20250514
+gs config set issueTracker.provider plain
+gs config set review.enabled false
+
+# Show config file paths
+gs config path
+```
+
+### Available Config Keys
+
+| Key                     | Values                                    | Description                    |
+| ----------------------- | ----------------------------------------- | ------------------------------ |
+| `commits.headerLength`  | `20` - `200`                              | Max commit header length       |
+| `commits.conventional`  | `true`, `false`                           | Use conventional commits       |
+| `commits.includeIssueRef` | `true`, `false`                         | Include issue ref in commits   |
+| `issueTracker.provider` | `linear`, `jira`, `asana`, `plain`, `none`| Issue tracker to use           |
+| `ai.provider`           | `openai`, `anthropic`, `gemini`           | AI provider for analysis       |
+| `ai.model`              | Model name string                         | AI model to use                |
+| `review.enabled`        | `true`, `false`                           | Enable code review             |
+| `review.tool`           | `coderabbit`, `devin`, `codex`, `graphite`| Code review tool               |
 
 ## What Makes It Different
 
 |                           |                                                                                                                                          |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **AI commit grouping**    | Produces small, reviewer-friendly commits that are each safe to revert — powered by OpenAI, Anthropic, or Gemini with heuristic fallback |
-| **Linear integration**    | Parses issue IDs from branch names, fetches context, and adds refs to commit messages automatically                                      |
+| **Multi-tracker support** | Works with Linear, Jira, Asana, or plain text requirements — not locked to one platform                                                  |
+| **Rich commit messages**  | Header (limited length) + body (detailed explanation) + footer (requirement mapping)                                                     |
 | **Code review gate**      | Runs CodeRabbit, Devin, Codex, or Graphite before pushing. Critical findings block the push.                                             |
 | **Conventional commits**  | Enforces type, scope, imperative mood, configurable length — no more inconsistent commit history                                         |
 | **Smart file filtering**  | Automatically ignores `node_modules`, `.env*`, `dist`, `.DS_Store`, `.gitshiprc.json` — configurable via `ignorePatterns`                |
 | **Global + local config** | One-time setup works across all repos; override per-repo when needed                                                                     |
 
+## Issue Tracker Integration
+
+git-ship supports multiple issue tracking systems to provide context for better commit messages:
+
+### Linear (Recommended)
+
+Automatically fetches issue details using your `LINEAR_API_KEY`:
+
+```bash
+# During setup, or manually:
+gs config set issueTracker.provider linear
+```
+
+### Jira (Experimental)
+
+Requires your Jira instance URL and API credentials:
+
+```bash
+# Environment variables needed:
+export JIRA_EMAIL="you@company.com"
+export JIRA_API_TOKEN="your-api-token"
+
+# Config:
+gs config set issueTracker.provider jira
+```
+
+Configure your Jira base URL in `.gitshiprc.json`:
+
+```json
+{
+  "jira": {
+    "baseUrl": "https://yourcompany.atlassian.net",
+    "projectKey": "PROJ"
+  }
+}
+```
+
+### Asana (Experimental)
+
+Requires your Asana personal access token:
+
+```bash
+export ASANA_ACCESS_TOKEN="your-access-token"
+gs config set issueTracker.provider asana
+```
+
+Note: Asana uses numeric task GIDs. Include the GID in your branch name (e.g., `feat/1234567890123-task-name`).
+
+### Plain Text
+
+Enter requirements manually each time you commit:
+
+```bash
+gs config set issueTracker.provider plain
+```
+
+When you run `gs`, you'll be prompted:
+
+```
+? Would you like to provide context/requirements for these changes? Yes
+? Enter the requirements or context for these changes: Add user authentication with OAuth2
+```
+
+### None
+
+Skip issue context entirely. Commits will be based on diffs only.
+
+**Warning:** Without context, commit messages will be generic:
+
+```
+feat(src): feat changes in src
+chore(root): chore changes in root
+```
+
+With context, you get meaningful messages:
+
+```
+feat(auth): add OAuth2 login with Google provider
+fix(cart): resolve race condition in quantity update
+```
+
+## Commit Message Structure
+
+git-ship generates rich, structured commit messages:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ feat(auth): add OAuth2 login with Google provider            │ ← Header (limited length)
+│                                                              │
+│ Implement Google OAuth2 authentication:                      │
+│ - Add OAuth2 callback handler                                │ ← Body (detailed, no limit)
+│ - Store tokens securely in session                           │
+│ - Add logout endpoint to revoke tokens                       │
+│                                                              │
+│ Addresses: "Users should be able to log in with Google"      │ ← Footer (requirement mapping)
+│ Refs: ENG-123                                                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- **Header**: Short summary shown in `git log`, limited to your configured length (default: 72)
+- **Body**: Detailed explanation of what changed and why — no length limit
+- **Footer**: Links commit to specific requirements + issue reference
+
 ## Branch Parsing
 
-git-ship detects Linear issue IDs from branch names with flexible matching:
+git-ship detects issue IDs from branch names with flexible matching:
 
 | Branch Name                        | Detected Issue | Confidence |
 | ---------------------------------- | -------------- | ---------- |
@@ -165,11 +305,30 @@ The AI reads every diff and applies two tests:
 1. **The Revert Test** (safety floor) — _"If this commit were reverted, would the codebase still compile and run?"_ Files that depend on each other must stay together.
 2. **The Review Test** (quality goal) — _"Can a reviewer understand this commit without reading the others?"_ Prefer smaller, focused commits that each tell one clear story.
 
-When Linear context is available, the AI uses the issue title, description, and labels to better understand the intent of your changes.
+When issue context is available (from Linear, Jira, Asana, or plain text), the AI uses it to better understand the intent of your changes and map commits to specific requirements.
+
+### AI Failure Handling
+
+If the AI call fails (e.g., API quota exceeded, rate limit, invalid key), git-ship:
+
+1. Shows a prominent error message with the reason
+2. Displays a suggestion for fixing the issue
+3. Lets you choose: **Continue with basic commits**, **Retry**, or **Cancel**
+
+```
+✖ AI commit analysis failed
+✖ API quota or rate limit exceeded
+  Suggestion: Check your OPENAI_API_KEY or ANTHROPIC_API_KEY env var.
+
+? How would you like to proceed?
+❯ Continue with basic commits (generic messages)
+  Retry AI analysis
+  Cancel
+```
 
 ### Fallback
 
-If AI is unavailable, heuristic groups from Pass 1 are used directly with auto-generated conventional commit messages.
+If AI is unavailable or you choose to continue without it, heuristic groups from Pass 1 are used directly with auto-generated conventional commit messages.
 
 ## Code Review
 
@@ -190,6 +349,7 @@ Stored at `~/.config/gitship/config.json`. Created automatically by the setup wi
 
 ```bash
 gs --setup  # Re-run setup wizard anytime
+gs config   # View current settings
 ```
 
 ### API Key Storage
@@ -229,12 +389,19 @@ Create a `.gitshiprc.json` in your project root to override global settings:
 
 ```json
 {
+  "issueTracker": {
+    "provider": "linear"
+  },
   "ai": {
     "provider": "openai",
     "model": "gpt-4o"
   },
   "linear": {
     "transport": "graphql"
+  },
+  "jira": {
+    "baseUrl": "https://yourcompany.atlassian.net",
+    "projectKey": "ENG"
   },
   "review": {
     "enabled": true,
@@ -296,6 +463,9 @@ git-ship loads `.env` from your project root automatically.
 | `OPENAI_API_KEY`     | OpenAI API key                                        |
 | `ANTHROPIC_API_KEY`  | Anthropic API key                                     |
 | `GEMINI_API_KEY`     | Google Gemini API key (also accepts `GOOGLE_API_KEY`) |
+| `JIRA_API_TOKEN`     | Jira API token                                        |
+| `JIRA_EMAIL`         | Jira account email                                    |
+| `ASANA_ACCESS_TOKEN` | Asana personal access token                           |
 | `CODERABBIT_API_KEY` | CodeRabbit API key (optional)                         |
 | `DEVIN_API_KEY`      | Devin API key (optional)                              |
 
@@ -318,13 +488,13 @@ git-ship loads `.env` from your project root automatically.
 
 git-ship is designed to work even when things fail:
 
-| Failure             | Behavior                              |
-| ------------------- | ------------------------------------- |
-| Linear unreachable  | Warns, proceeds without issue context |
-| AI provider fails   | Falls back to heuristic-only grouping |
-| Review tool missing | Warns, offers to skip                 |
-| Push rejected       | Shows error with suggested fix        |
-| No changes          | Clean exit with info message          |
+| Failure              | Behavior                                              |
+| -------------------- | ----------------------------------------------------- |
+| Issue tracker fails  | Warns, proceeds without issue context                 |
+| AI provider fails    | Shows error, offers retry/continue/cancel             |
+| Review tool missing  | Warns, offers to skip                                 |
+| Push rejected        | Shows error with suggested fix                        |
+| No changes           | Clean exit with info message                          |
 
 ## Requirements
 

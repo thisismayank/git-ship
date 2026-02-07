@@ -1,9 +1,29 @@
 import { z } from 'zod';
 
+export const issueTrackerProviders = ['linear', 'jira', 'asana', 'plain', 'none'] as const;
+export type IssueTrackerProvider = typeof issueTrackerProviders[number];
+
 export const configSchema = z.object({
+  // Issue tracker provider selection
+  issueTracker: z.object({
+    provider: z.enum(issueTrackerProviders).default('none'),
+  }).default({}),
+
+  // Linear-specific settings
   linear: z.object({
     transport: z.enum(['graphql', 'mcp']).default('graphql'),
     mcpEndpoint: z.string().url().default('https://mcp.linear.app/sse'),
+  }).default({}),
+
+  // Jira-specific settings (experimental)
+  jira: z.object({
+    baseUrl: z.string().url().optional(), // e.g., https://yourcompany.atlassian.net
+    projectKey: z.string().optional(),     // e.g., ENG, PROJ
+  }).default({}),
+
+  // Asana-specific settings (experimental)
+  asana: z.object({
+    workspaceId: z.string().optional(),
   }).default({}),
 
   ai: z.object({
@@ -47,6 +67,10 @@ export type GitShipConfig = z.infer<typeof configSchema>;
 
 // Global config schema - subset for user-level settings
 export const globalConfigSchema = z.object({
+  issueTracker: z.object({
+    provider: z.enum(issueTrackerProviders),
+  }).partial(),
+
   ai: z.object({
     provider: z.enum(['openai', 'anthropic', 'gemini']),
     model: z.string(),
@@ -55,6 +79,15 @@ export const globalConfigSchema = z.object({
   linear: z.object({
     transport: z.enum(['graphql', 'mcp']),
     mcpEndpoint: z.string().url(),
+  }).partial(),
+
+  jira: z.object({
+    baseUrl: z.string().url(),
+    projectKey: z.string(),
+  }).partial(),
+
+  asana: z.object({
+    workspaceId: z.string(),
   }).partial(),
 
   branch: z.object({

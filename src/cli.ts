@@ -10,12 +10,12 @@ import { loadConfig, hasProjectConfig } from './config/loader.js';
 import { shouldRunGlobalSetup, runGlobalSetupWizard } from './config/setup-wizard.js';
 import { shouldRunRepoSetup, promptRepoSetup, runRepoSetupWizard, markRepoAsUsingGlobalConfig } from './config/repo-setup.js';
 import type { GitShipConfig } from './config/schema.js';
-import { createGit, getStatus } from './git/status.js';
+import { createGit, getStatus, isGitRepository } from './git/status.js';
 import { getFileDiffs } from './git/diff.js';
 import { stageAndCommitMultiple } from './git/commit.js';
 import { pushToRemote } from './git/push.js';
 import { parseBranch } from './linear/branch-parser.js';
-import { createLinearClient, type LinearIssue } from './linear/index.js';
+import { createIssueTrackerClient, requiresIssueFetch, usesPlainTextContext, createPlainTextContext, type IssueContext } from './issue-tracker/index.js';
 import { heuristicGroup, mergeAIGroups, type CommitGroup } from './analysis/grouper.js';
 import { analyzeWithAI } from './analysis/ai-client.js';
 import { formatAllCommitMessages } from './analysis/commit-message.js';
@@ -27,10 +27,10 @@ import { CodexAdapter } from './review/codex.js';
 import { GraphiteAdapter } from './review/graphite.js';
 import { withSpinner } from './ui/spinner.js';
 import { displayIssueContext, displayCommitPlan, displayReviewResults, displayChangedFiles } from './ui/display.js';
-import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush } from './ui/prompts.js';
+import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptAIFailureAction, promptPlainTextRequirements } from './ui/prompts.js';
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
-import { GitShipError } from './utils/errors.js';
+import { GitShipError, AIError } from './utils/errors.js';
 import { createUpdateChecker, displayUpdateBanner, displayUpdateNotification, type UpdateChecker } from './utils/update-check.js';
 
 const require = createRequire(import.meta.url);
@@ -92,12 +92,18 @@ async function ship(options: {
 }): Promise<void> {
   if (options.verbose) setLogLevel('debug');
 
+  // Early check: make sure we're in a git repository
+  const git = createGit();
+  if (!(await isGitRepository(git))) {
+    logger.error('Not a git repository');
+    logger.info(chalk.dim('Run this command from inside a git repository, or initialize one with: git init'));
+    process.exit(1);
+  }
+
   // Run setup wizards if needed (global and/or repo)
   await ensureSetup();
 
   const config = await loadConfig();
-
-  const git = createGit();
 
   // ─── Step 1: Detect branch & parse issue ID ───
   logger.step(1, TOTAL_STEPS, 'Detecting branch and issue ID...');
@@ -112,8 +118,11 @@ async function ship(options: {
   const branchName = status.branch;
   logger.debug(`Branch: ${branchName}`);
 
+  // Parse issue ID from branch if using an external issue tracker
   let issueId: string | null = options.issue ?? null;
-  if (!issueId) {
+  const needsIssueFetch = requiresIssueFetch(config);
+
+  if (needsIssueFetch && !issueId) {
     const parsed = parseBranch(branchName, config.branch.teamPrefixes);
 
     if (parsed.issueId) {
@@ -126,41 +135,68 @@ async function ship(options: {
         issueId = result.issueId;
       }
     }
+
+    if (!issueId) {
+      issueId = await promptIssueId(branchName);
+    }
+
+    if (issueId) {
+      logger.success(`Issue: ${chalk.bold(issueId)}`);
+    } else {
+      logger.warn('No issue ID detected. Proceeding without issue context.');
+    }
   }
 
-  if (!issueId) {
-    issueId = await promptIssueId(branchName);
-  }
+  // ─── Step 2: Fetch issue context ───
+  const providerName = config.issueTracker.provider;
+  const providerLabels: Record<string, string> = {
+    linear: 'Linear',
+    jira: 'Jira',
+    asana: 'Asana',
+    plain: 'Plain Text',
+    none: 'None',
+  };
 
-  if (issueId) {
-    logger.success(`Issue: ${chalk.bold(issueId)}`);
-  } else {
-    logger.warn('No issue ID detected. Proceeding without Linear context.');
-  }
+  logger.step(2, TOTAL_STEPS, `Fetching issue context (${providerLabels[providerName] || providerName})...`);
 
-  // ─── Step 2: Fetch Linear context ───
-  logger.step(2, TOTAL_STEPS, 'Fetching Linear context...');
+  let issueContext: IssueContext | null = null;
 
-  let issue: LinearIssue | null = null;
-  if (issueId) {
-    const linearClient = createLinearClient(config);
-    if (linearClient) {
+  if (usesPlainTextContext(config)) {
+    // Plain text mode: prompt user for requirements
+    const requirements = await promptPlainTextRequirements();
+    if (requirements) {
+      issueContext = createPlainTextContext(requirements);
+      logger.success('Requirements captured.');
+    } else {
+      logger.info(chalk.dim('No requirements provided. Proceeding with diffs only.'));
+    }
+  } else if (needsIssueFetch && issueId) {
+    // External issue tracker: fetch from API
+    const issueClient = createIssueTrackerClient(config);
+    if (issueClient) {
       try {
-        issue = await withSpinner('Fetching issue details', () =>
-          linearClient.getIssue(issueId!),
+        issueContext = await withSpinner(`Fetching issue from ${issueClient.name}`, () =>
+          issueClient.getIssue(issueId!),
         );
-        if (issue) {
-          displayIssueContext(issue);
+        if (issueContext) {
+          displayIssueContext(issueContext);
         } else {
-          logger.warn(`Issue ${issueId} not found in Linear.`);
+          logger.warn(`Issue ${issueId} not found.`);
         }
       } catch (error) {
-        logger.warn(`Could not fetch Linear issue: ${(error as Error).message}`);
+        logger.warn(`Could not fetch issue: ${(error as Error).message}`);
         logger.debug('Proceeding without issue context.');
       }
     } else {
-      logger.warn('LINEAR_API_KEY not set. Skipping issue fetch.');
+      const keyNames: Record<string, string> = {
+        linear: 'LINEAR_API_KEY',
+        jira: 'JIRA_API_TOKEN and JIRA_EMAIL',
+        asana: 'ASANA_ACCESS_TOKEN',
+      };
+      logger.warn(`${keyNames[providerName] || 'API key'} not set. Skipping issue fetch.`);
     }
+  } else if (providerName === 'none') {
+    logger.info(chalk.dim('Issue tracking disabled. Using diffs only.'));
   }
 
   // ─── Step 3: Collect changed files & parse diffs ───
@@ -189,16 +225,47 @@ async function ship(options: {
   const preGroups = heuristicGroup(filePaths);
   logger.debug(`Heuristic pre-groups: ${preGroups.length}`);
 
-  let groups: CommitGroup[];
-  try {
-    const aiGroups = await withSpinner('AI analyzing diffs for optimal grouping', () =>
-      analyzeWithAI(config, diffs, preGroups, issue),
-    );
-    groups = mergeAIGroups(preGroups, aiGroups, filePaths);
-  } catch (error) {
-    logger.warn(`AI grouping failed: ${(error as Error).message}`);
-    logger.info('Falling back to heuristic grouping.');
-    groups = mergeAIGroups(preGroups, null, filePaths);
+  // Initialize with fallback groups - will be overwritten on AI success
+  let groups: CommitGroup[] = mergeAIGroups(preGroups, null, filePaths);
+  let aiAnalysisSucceeded = false;
+
+  // Keep trying AI analysis until success, user chooses to continue with basic, or cancels
+  while (!aiAnalysisSucceeded) {
+    try {
+      const aiGroups = await withSpinner('AI analyzing diffs for optimal grouping', () =>
+        analyzeWithAI(config, diffs, preGroups, issueContext),
+      );
+      groups = mergeAIGroups(preGroups, aiGroups, filePaths);
+      aiAnalysisSucceeded = true;
+    } catch (error) {
+      const aiError = error as AIError;
+
+      // Show prominent error message
+      console.log(); // Add spacing
+      logger.error(chalk.bold('AI commit analysis failed'));
+      logger.error(aiError.message);
+      if (aiError.suggestion) {
+        logger.info(chalk.dim(`Suggestion: ${aiError.suggestion}`));
+      }
+      console.log(); // Add spacing
+
+      // Prompt user for action
+      const failureAction = await promptAIFailureAction(aiError.message);
+
+      if (failureAction === 'cancel') {
+        logger.info('Cancelled.');
+        return;
+      }
+
+      if (failureAction === 'retry') {
+        logger.info('Retrying AI analysis...');
+        continue; // Loop back to try again
+      }
+
+      // failureAction === 'continue' - proceed with basic commits (already initialized)
+      logger.warn('Proceeding with basic commit messages (file grouping by directory).');
+      break;
+    }
   }
 
   // ─── Step 5: Display commit plan & get user decision ───
@@ -231,14 +298,44 @@ async function ship(options: {
   if (action === 'regroup') {
     // Re-run AI grouping with a fresh call
     logger.info('Re-running AI grouping...');
-    try {
-      const aiGroups = await withSpinner('Re-analyzing diffs', () =>
-        analyzeWithAI(config, diffs, preGroups, issue),
-      );
-      finalGroups = mergeAIGroups(preGroups, aiGroups, filePaths);
-    } catch {
-      logger.warn('AI re-grouping failed, using previous groups.');
+    let regroupSucceeded = false;
+
+    while (!regroupSucceeded) {
+      try {
+        const aiGroups = await withSpinner('Re-analyzing diffs', () =>
+          analyzeWithAI(config, diffs, preGroups, issueContext),
+        );
+        finalGroups = mergeAIGroups(preGroups, aiGroups, filePaths);
+        regroupSucceeded = true;
+      } catch (error) {
+        const aiError = error as AIError;
+
+        console.log();
+        logger.error(chalk.bold('AI re-grouping failed'));
+        logger.error(aiError.message);
+        if (aiError.suggestion) {
+          logger.info(chalk.dim(`Suggestion: ${aiError.suggestion}`));
+        }
+        console.log();
+
+        const failureAction = await promptAIFailureAction(aiError.message);
+
+        if (failureAction === 'cancel') {
+          logger.info('Cancelled.');
+          return;
+        }
+
+        if (failureAction === 'retry') {
+          logger.info('Retrying AI analysis...');
+          continue;
+        }
+
+        // Continue with previous groups
+        logger.warn('Keeping previous commit grouping.');
+        break;
+      }
     }
+
     displayCommitPlan(finalGroups, issueId ?? undefined);
 
     action = await promptCommitPlanAction();
@@ -254,7 +351,7 @@ async function ship(options: {
     includeIssueRef: config.commits.includeIssueRef,
     issueId,
     allowedTypes: config.commits.allowedTypes,
-    maxMessageLength: config.commits.maxMessageLength,
+    maxHeaderLength: config.commits.maxMessageLength,
   });
 
   const results = await withSpinner(
@@ -360,6 +457,10 @@ Examples:
   $ gs --readme               Display full documentation
 
 Configuration:
+  $ gs config                 Show current configuration
+  $ gs config set <key> <val> Update a setting (e.g., gs config set commits.headerLength 50)
+  $ gs config path            Show config file paths
+
   Global config:  ~/.config/gitship/config.json
   Local config:   .gitshiprc.json (per-repo overrides)
   API keys:       Stored in your shell profile (~/.zshrc, ~/.bashrc, etc.)
@@ -419,5 +520,182 @@ More info: https://github.com/thisismayank/git-ship
       throw error;
     }
   });
+
+// ─── Config Subcommand ───
+const configCmd = program
+  .command('config')
+  .description('View or modify git-ship configuration');
+
+configCmd
+  .command('show')
+  .description('Show current configuration')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const { loadGlobalConfig, getGlobalConfigPath } = await import('./config/global.js');
+    const { loadConfig } = await import('./config/loader.js');
+
+    const globalConfig = await loadGlobalConfig();
+    const effectiveConfig = await loadConfig();
+
+    if (options.json) {
+      console.log(JSON.stringify(effectiveConfig, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold('\n📁 Configuration Files\n'));
+    console.log(`  Global: ${chalk.cyan(getGlobalConfigPath())}`);
+    console.log(`  Local:  ${chalk.cyan('.gitshiprc.json')} ${chalk.dim('(if exists, overrides global)')}`);
+
+    console.log(chalk.bold('\n⚙️  Current Settings\n'));
+
+    // Issue Tracker
+    const provider = effectiveConfig.issueTracker?.provider || 'none';
+    const providerLabels: Record<string, string> = {
+      linear: 'Linear',
+      jira: 'Jira (Experimental)',
+      asana: 'Asana (Experimental)',
+      plain: 'Plain Text',
+      none: 'None',
+    };
+    console.log(`  ${chalk.dim('Issue Tracker:')}  ${providerLabels[provider] || provider}`);
+
+    // AI Provider
+    console.log(`  ${chalk.dim('AI Provider:')}    ${effectiveConfig.ai.provider} (${effectiveConfig.ai.model})`);
+
+    // Commits
+    console.log(`  ${chalk.dim('Header Length:')} ${effectiveConfig.commits.maxMessageLength} characters`);
+    console.log(`  ${chalk.dim('Conventional:')}  ${effectiveConfig.commits.conventional ? 'Yes' : 'No'}`);
+    console.log(`  ${chalk.dim('Issue Refs:')}    ${effectiveConfig.commits.includeIssueRef ? 'Yes' : 'No'}`);
+
+    // Review
+    console.log(`  ${chalk.dim('Code Review:')}   ${effectiveConfig.review.enabled ? `${effectiveConfig.review.tool} (${effectiveConfig.review.transport})` : 'Disabled'}`);
+
+    console.log(chalk.dim('\nRun "gs config set <key> <value>" to change settings.'));
+    console.log(chalk.dim('Run "gs --setup" to re-run the full setup wizard.\n'));
+  });
+
+configCmd
+  .command('set <key> <value>')
+  .description('Set a configuration value')
+  .addHelpText('after', `
+Supported keys:
+  commits.headerLength    Maximum commit header length (20-200)
+  commits.conventional    Use conventional commits format (true/false)
+  commits.includeIssueRef Include issue reference in commits (true/false)
+  issueTracker.provider   Issue tracker: linear, jira, asana, plain, none
+  ai.provider             AI provider: openai, anthropic, gemini
+  ai.model                AI model name (e.g., gpt-4o, claude-sonnet-4-20250514)
+  review.enabled          Enable code review (true/false)
+  review.tool             Review tool: coderabbit, devin, codex, graphite
+
+Examples:
+  $ gs config set commits.headerLength 50
+  $ gs config set ai.provider anthropic
+  $ gs config set issueTracker.provider plain
+  $ gs config set review.enabled false
+`)
+  .action(async (key: string, value: string) => {
+    const { loadGlobalConfig, writeGlobalConfig, getGlobalConfigPath } = await import('./config/global.js');
+    type PartialConfig = Record<string, Record<string, unknown> | undefined>;
+
+    const config: PartialConfig = await loadGlobalConfig() || {};
+
+    // Parse the key path
+    const keyLower = key.toLowerCase();
+    let updated = false;
+
+    // Handle different config keys
+    if (keyLower === 'commits.headerlength' || keyLower === 'commits.maxmessagelength') {
+      const num = parseInt(value, 10);
+      if (isNaN(num) || num < 20 || num > 200) {
+        logger.error('Header length must be a number between 20 and 200');
+        process.exit(1);
+      }
+      config.commits = { ...config.commits, maxMessageLength: num };
+      updated = true;
+      logger.success(`Set commits.headerLength = ${num}`);
+
+    } else if (keyLower === 'commits.conventional') {
+      const bool = value.toLowerCase() === 'true';
+      config.commits = { ...config.commits, conventional: bool };
+      updated = true;
+      logger.success(`Set commits.conventional = ${bool}`);
+
+    } else if (keyLower === 'commits.includeissueref') {
+      const bool = value.toLowerCase() === 'true';
+      config.commits = { ...config.commits, includeIssueRef: bool };
+      updated = true;
+      logger.success(`Set commits.includeIssueRef = ${bool}`);
+
+    } else if (keyLower === 'issuetracker.provider') {
+      const validProviders = ['linear', 'jira', 'asana', 'plain', 'none'];
+      if (!validProviders.includes(value.toLowerCase())) {
+        logger.error(`Invalid provider. Must be one of: ${validProviders.join(', ')}`);
+        process.exit(1);
+      }
+      config.issueTracker = { ...config.issueTracker, provider: value.toLowerCase() };
+      updated = true;
+      logger.success(`Set issueTracker.provider = ${value.toLowerCase()}`);
+
+    } else if (keyLower === 'ai.provider') {
+      const validProviders = ['openai', 'anthropic', 'gemini'];
+      if (!validProviders.includes(value.toLowerCase())) {
+        logger.error(`Invalid AI provider. Must be one of: ${validProviders.join(', ')}`);
+        process.exit(1);
+      }
+      config.ai = { ...config.ai, provider: value.toLowerCase() };
+      updated = true;
+      logger.success(`Set ai.provider = ${value.toLowerCase()}`);
+
+    } else if (keyLower === 'ai.model') {
+      config.ai = { ...config.ai, model: value };
+      updated = true;
+      logger.success(`Set ai.model = ${value}`);
+
+    } else if (keyLower === 'review.enabled') {
+      const bool = value.toLowerCase() === 'true';
+      config.review = { ...config.review, enabled: bool };
+      updated = true;
+      logger.success(`Set review.enabled = ${bool}`);
+
+    } else if (keyLower === 'review.tool') {
+      const validTools = ['coderabbit', 'devin', 'codex', 'graphite'];
+      if (!validTools.includes(value.toLowerCase())) {
+        logger.error(`Invalid review tool. Must be one of: ${validTools.join(', ')}`);
+        process.exit(1);
+      }
+      config.review = { ...config.review, tool: value.toLowerCase() };
+      updated = true;
+      logger.success(`Set review.tool = ${value.toLowerCase()}`);
+
+    } else {
+      logger.error(`Unknown config key: ${key}`);
+      logger.info('Run "gs config set --help" to see available keys.');
+      process.exit(1);
+    }
+
+    if (updated) {
+      await writeGlobalConfig(config);
+      logger.info(chalk.dim(`Config saved to ${getGlobalConfigPath()}`));
+    }
+  });
+
+configCmd
+  .command('path')
+  .description('Show configuration file paths')
+  .action(async () => {
+    const { getGlobalConfigPath } = await import('./config/global.js');
+    console.log(chalk.bold('\nConfiguration File Paths\n'));
+    console.log(`  Global config: ${chalk.cyan(getGlobalConfigPath())}`);
+    console.log(`  Local config:  ${chalk.cyan('.gitshiprc.json')} ${chalk.dim('(in repository root)')}`);
+    console.log(`  API keys:      ${chalk.cyan('~/.zshrc')} ${chalk.dim('or ~/.bashrc')}`);
+    console.log();
+  });
+
+// Default config command (no subcommand) shows config
+configCmd.action(async () => {
+  // Run 'show' by default
+  await configCmd.commands.find(c => c.name() === 'show')?.parseAsync([]);
+});
 
 program.parse();

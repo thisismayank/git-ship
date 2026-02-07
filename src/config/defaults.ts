@@ -1,10 +1,15 @@
 import type { GitShipConfig } from './schema.js';
 
 export const defaultConfig: GitShipConfig = {
+  issueTracker: {
+    provider: 'none',
+  },
   linear: {
     transport: 'graphql',
     mcpEndpoint: 'https://mcp.linear.app/sse',
   },
+  jira: {},
+  asana: {},
   ai: {
     provider: 'openai',
     model: 'gpt-4o',

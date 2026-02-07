@@ -97,6 +97,162 @@ function showSourceReminder(apiKeysAdded: string[]): void {
   }
 }
 
+// ─── Provider Setup Functions ───
+
+async function setupLinearProvider(
+  config: Partial<GlobalConfig>,
+  apiKeysAdded: string[],
+): Promise<void> {
+  // Transport selection
+  const linearTransport = await select({
+    message: 'How would you like to connect to Linear?',
+    choices: [
+      {
+        name: 'API Key (Recommended)',
+        value: 'graphql' as const,
+        description: 'Direct GraphQL API - requires LINEAR_API_KEY',
+      },
+      {
+        name: 'MCP (Model Context Protocol)',
+        value: 'mcp' as const,
+        description: 'SSE-based connection - also requires LINEAR_API_KEY',
+      },
+    ],
+  });
+
+  config.linear = {
+    transport: linearTransport,
+    mcpEndpoint: 'https://mcp.linear.app/sse',
+  };
+
+  // LINEAR_API_KEY
+  logger.info('');
+  await promptApiKey('LINEAR_API_KEY', apiKeysAdded, {
+    description: 'Get your API key from: https://linear.app/settings/api\n(Create a "Personal API Key" with read access)\n',
+  });
+
+  // Validate connection
+  const linearApiKey = process.env.LINEAR_API_KEY;
+  if (linearApiKey) {
+    const validated = await validateLinearConnection(linearApiKey);
+    if (validated) {
+      logger.success('Linear connection validated successfully!');
+    } else {
+      logger.warn('Could not validate Linear connection. Check your API key.');
+    }
+  }
+
+  // Team prefixes
+  logger.info(chalk.dim('\nTeam prefixes help identify issue IDs in branch names (e.g., ENG-123, DES-456).\n'));
+
+  const prefixesInput = await input({
+    message: 'Enter your team prefixes (comma-separated):',
+    default: 'ENG,DES',
+    validate: (val) => {
+      if (!val.trim()) return 'At least one prefix is required';
+      return true;
+    },
+  });
+
+  config.branch = {
+    teamPrefixes: prefixesInput.split(',').map((p) => p.trim().toUpperCase()).filter(Boolean),
+  };
+}
+
+async function setupJiraProvider(
+  config: Partial<GlobalConfig>,
+  apiKeysAdded: string[],
+): Promise<void> {
+  logger.info(chalk.yellow('\n⚠ Jira integration is experimental and may not work with all configurations.\n'));
+
+  // Jira base URL
+  const baseUrl = await input({
+    message: 'Enter your Jira instance URL:',
+    default: 'https://yourcompany.atlassian.net',
+    validate: (val) => {
+      try {
+        new URL(val.trim());
+        return true;
+      } catch {
+        return 'Please enter a valid URL';
+      }
+    },
+  });
+
+  // Project key (optional)
+  const projectKey = await input({
+    message: 'Enter your default project key (optional, e.g., PROJ):',
+    default: '',
+  });
+
+  config.jira = {
+    baseUrl: baseUrl.trim(),
+    projectKey: projectKey.trim() || undefined,
+  };
+
+  // JIRA_EMAIL
+  logger.info('');
+  logger.info(chalk.dim('Jira requires your email and an API token for authentication.\n'));
+
+  const jiraEmail = await input({
+    message: 'Enter your Jira account email:',
+    validate: (val) => val.trim().includes('@') ? true : 'Please enter a valid email',
+  });
+
+  if (jiraEmail.trim()) {
+    const result = await addApiKeyToShellProfile('JIRA_EMAIL', jiraEmail.trim());
+    if (result.success) {
+      apiKeysAdded.push('JIRA_EMAIL');
+      process.env.JIRA_EMAIL = jiraEmail.trim();
+      logger.success(`Added JIRA_EMAIL to ${result.profilePath}`);
+    }
+  }
+
+  // JIRA_API_TOKEN
+  await promptApiKey('JIRA_API_TOKEN', apiKeysAdded, {
+    description: 'Get your API token from: https://id.atlassian.com/manage-profile/security/api-tokens\n',
+  });
+
+  // Team prefixes for branch parsing
+  logger.info(chalk.dim('\nProject prefixes help identify issue IDs in branch names (e.g., PROJ-123).\n'));
+
+  const prefixesInput = await input({
+    message: 'Enter your project prefixes (comma-separated):',
+    default: projectKey || 'PROJ',
+    validate: (val) => {
+      if (!val.trim()) return 'At least one prefix is required';
+      return true;
+    },
+  });
+
+  config.branch = {
+    teamPrefixes: prefixesInput.split(',').map((p) => p.trim().toUpperCase()).filter(Boolean),
+  };
+}
+
+async function setupAsanaProvider(
+  config: Partial<GlobalConfig>,
+  apiKeysAdded: string[],
+): Promise<void> {
+  logger.info(chalk.yellow('\n⚠ Asana integration is experimental.\n'));
+  logger.info(chalk.dim('Note: Asana uses task GIDs as identifiers. You\'ll need to include'));
+  logger.info(chalk.dim('the task GID in your branch name (e.g., feat/1234567890123-task-name).\n'));
+
+  // ASANA_ACCESS_TOKEN
+  await promptApiKey('ASANA_ACCESS_TOKEN', apiKeysAdded, {
+    description: 'Get your Personal Access Token from: https://app.asana.com/0/my-apps\n(Click "Create new token" under Personal access tokens)\n',
+  });
+
+  // Since Asana uses numeric GIDs, we don't need team prefixes
+  // But we'll set an empty array to indicate this
+  config.branch = {
+    teamPrefixes: [],
+  };
+
+  logger.info(chalk.dim('\nAsana task GIDs are numeric (e.g., 1234567890123).'));
+  logger.info(chalk.dim('Include the GID in your branch name for automatic detection.\n'));
+}
+
 export async function runGlobalSetupWizard(): Promise<SetupResult> {
   logger.info(chalk.bold('\n Welcome to git-ship! Let\'s set up your configuration.\n'));
 
@@ -138,70 +294,70 @@ export async function runGlobalSetupWizard(): Promise<SetupResult> {
 
   await promptApiKey(aiApiKeyName, apiKeysAdded);
 
-  // ─── Section 2: Linear Integration ───
-  logger.info(chalk.bold.blue('\n2. Linear Integration\n'));
-  logger.info(chalk.dim('git-ship can fetch issue context from Linear to improve commit messages.\n'));
+  // ─── Section 2: Issue Tracker Integration ───
+  logger.info(chalk.bold.blue('\n2. Issue Tracker Integration\n'));
+  logger.info(chalk.dim('git-ship uses issue/ticket context to create better commit messages.\n'));
 
-  const setupLinear = await confirm({
-    message: 'Would you like to connect Linear?',
-    default: true,
+  const issueTrackerProvider = await select({
+    message: 'How would you like to provide issue context?',
+    choices: [
+      {
+        name: 'Linear (Recommended)',
+        value: 'linear' as const,
+        description: 'Automatically fetch issue details from Linear',
+      },
+      {
+        name: 'Jira (Experimental)',
+        value: 'jira' as const,
+        description: 'Fetch issue details from Jira - requires setup',
+      },
+      {
+        name: 'Asana (Experimental)',
+        value: 'asana' as const,
+        description: 'Fetch task details from Asana - requires setup',
+      },
+      {
+        name: 'Plain Text',
+        value: 'plain' as const,
+        description: 'Manually enter requirements each time you commit',
+      },
+      {
+        name: 'None',
+        value: 'none' as const,
+        description: 'Skip issue context - commits based on diffs only',
+      },
+    ],
   });
 
-  if (setupLinear) {
-    // Transport selection first
-    const linearTransport = await select({
-      message: 'How would you like to connect to Linear?',
-      choices: [
-        {
-          name: 'API Key (Recommended)',
-          value: 'graphql' as const,
-          description: 'Direct GraphQL API - requires LINEAR_API_KEY',
-        },
-        {
-          name: 'MCP (Model Context Protocol)',
-          value: 'mcp' as const,
-          description: 'SSE-based connection - also requires LINEAR_API_KEY',
-        },
-      ],
-    });
+  config.issueTracker = { provider: issueTrackerProvider };
 
-    config.linear = {
-      transport: linearTransport,
-      mcpEndpoint: 'https://mcp.linear.app/sse',
-    };
-
-    // LINEAR_API_KEY (needed for both transports)
+  // Provider-specific setup
+  if (issueTrackerProvider === 'linear') {
+    await setupLinearProvider(config, apiKeysAdded);
+  } else if (issueTrackerProvider === 'jira') {
+    await setupJiraProvider(config, apiKeysAdded);
+  } else if (issueTrackerProvider === 'asana') {
+    await setupAsanaProvider(config, apiKeysAdded);
+  } else if (issueTrackerProvider === 'plain') {
+    logger.info(chalk.dim('\nYou\'ll be prompted to enter requirements when running git-ship.'));
+    logger.info(chalk.dim('This context helps the AI understand what you\'re working on.\n'));
+  } else {
+    // "none" selected - show warning about basic commits
     logger.info('');
-    const linearKeyResult = await promptApiKey('LINEAR_API_KEY', apiKeysAdded, {
-      description: 'Get your API key from: https://linear.app/settings/api\n(Create a "Personal API Key" with read access)\n',
-    });
-
-    // Validate Linear connection
-    const linearApiKey = process.env.LINEAR_API_KEY;
-    if (linearApiKey) {
-      const validated = await validateLinearConnection(linearApiKey);
-      if (validated) {
-        logger.success('Linear connection validated successfully!');
-      } else {
-        logger.warn('Could not validate Linear connection. Check your API key.');
-      }
-    }
-
-    // Team prefixes
-    logger.info(chalk.dim('\nTeam prefixes help identify issue IDs in branch names (e.g., ENG-123, DES-456).\n'));
-
-    const prefixesInput = await input({
-      message: 'Enter your team prefixes (comma-separated):',
-      default: 'ENG,DES',
-      validate: (val) => {
-        if (!val.trim()) return 'At least one prefix is required';
-        return true;
-      },
-    });
-
-    config.branch = {
-      teamPrefixes: prefixesInput.split(',').map((p) => p.trim().toUpperCase()).filter(Boolean),
-    };
+    logger.warn(chalk.yellow.bold('Without issue context, commit messages will be basic and generic.'));
+    logger.info('');
+    logger.info(chalk.dim('Example commits without context:'));
+    logger.info(chalk.dim('  • feat(src): feat changes in src'));
+    logger.info(chalk.dim('  • chore(root): chore changes in root'));
+    logger.info(chalk.dim('  • fix(components): fix changes in components'));
+    logger.info('');
+    logger.info(chalk.dim('Example commits WITH context (Linear/Jira/Plain Text):'));
+    logger.info(chalk.dim('  • feat(auth): add OAuth2 login flow with Google provider'));
+    logger.info(chalk.dim('  • fix(cart): resolve race condition in quantity update'));
+    logger.info(chalk.dim('  • refactor(api): extract validation logic to middleware'));
+    logger.info('');
+    logger.info(chalk.dim('You can change this later by running: gs --setup'));
+    logger.info('');
   }
 
   // ─── Section 3: Code Review Tool (Optional) ───
@@ -306,8 +462,26 @@ export async function runGlobalSetupWizard(): Promise<SetupResult> {
   // ─── Section 4: Commit Settings ───
   logger.info(chalk.bold.blue('\n4. Commit Settings\n'));
 
+  logger.info(chalk.dim('Commit messages have three parts:'));
+  logger.info(chalk.dim('  • Header: Short summary (limited length), shown in git log'));
+  logger.info(chalk.dim('  • Body: Detailed explanation of what changed'));
+  logger.info(chalk.dim('  • Footer: Links commit to requirements/issue\n'));
+
+  logger.info(chalk.dim('Example:'));
+  logger.info(chalk.dim('  ┌──────────────────────────────────────────────────────────────┐'));
+  logger.info(chalk.dim('  │ feat(auth): add OAuth2 login with Google provider            │ ← Header'));
+  logger.info(chalk.dim('  │                                                              │'));
+  logger.info(chalk.dim('  │ Implement Google OAuth2 authentication:                      │'));
+  logger.info(chalk.dim('  │ - Add OAuth2 callback handler                                │ ← Body'));
+  logger.info(chalk.dim('  │ - Store tokens securely in session                           │'));
+  logger.info(chalk.dim('  │ - Add logout endpoint to revoke tokens                       │'));
+  logger.info(chalk.dim('  │                                                              │'));
+  logger.info(chalk.dim('  │ Addresses: "Users should be able to log in with Google"      │ ← Footer'));
+  logger.info(chalk.dim('  │ Refs: ENG-123                                                │'));
+  logger.info(chalk.dim('  └──────────────────────────────────────────────────────────────┘\n'));
+
   const maxLenInput = await input({
-    message: 'Maximum commit message length (20-200):',
+    message: 'Maximum commit header length (20-200):',
     default: '72',
     validate: (val) => {
       const n = parseInt(val.trim(), 10);
@@ -316,6 +490,8 @@ export async function runGlobalSetupWizard(): Promise<SetupResult> {
     },
   });
   config.commits = { maxMessageLength: parseInt(maxLenInput.trim(), 10) };
+
+  logger.info(chalk.dim('\nThe body has no length limit and will include detailed context.'));
 
   // ─── Save Configuration ───
   await writeGlobalConfig(config);

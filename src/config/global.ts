@@ -3,6 +3,9 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 export interface GlobalConfig {
+  issueTracker: {
+    provider: 'linear' | 'jira' | 'asana' | 'plain' | 'none';
+  };
   ai: {
     provider: 'openai' | 'anthropic' | 'gemini';
     model: string;
@@ -10,6 +13,13 @@ export interface GlobalConfig {
   linear: {
     transport: 'graphql' | 'mcp';
     mcpEndpoint: string;
+  };
+  jira: {
+    baseUrl: string;
+    projectKey?: string;
+  };
+  asana: {
+    workspaceId?: string;
   };
   branch: {
     teamPrefixes: string[];
@@ -26,6 +36,8 @@ export interface GlobalConfig {
   };
   commits: {
     maxMessageLength: number;
+    conventional?: boolean;
+    includeIssueRef?: boolean;
   };
 }
 

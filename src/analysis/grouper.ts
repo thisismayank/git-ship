@@ -6,7 +6,12 @@ export interface CommitGroup {
   files: string[];
   type: string;
   scope: string;
+  /** Short summary for commit header (subject line) */
   summary: string;
+  /** Detailed explanation for commit body */
+  body?: string;
+  /** Which part of the requirement/issue this commit addresses */
+  addresses?: string;
   rationale?: string;
 }
 
@@ -82,6 +87,8 @@ export function mergeAIGroups(
       type: g.type,
       scope: g.scope,
       summary: g.summary,
+      body: g.body,
+      addresses: g.addresses,
       rationale: g.rationale,
     }));
 
