@@ -2,25 +2,50 @@ import chalk from 'chalk';
 import boxen from 'boxen';
 import type { CommitGroup } from '../analysis/grouper.js';
 import type { ReviewResult } from '../review/runner.js';
-import type { LinearIssue } from '../linear/types.js';
+import type { IssueContext } from '../issue-tracker/types.js';
 
-export function displayIssueContext(issue: LinearIssue): void {
-  const lines = [
-    `${chalk.bold(issue.identifier)}: ${issue.title}`,
-    `State: ${chalk.cyan(issue.state)}`,
-  ];
-  if (issue.labels.length > 0) {
-    lines.push(`Labels: ${issue.labels.map((l) => chalk.magenta(l)).join(', ')}`);
-  }
-  if (issue.description) {
-    const truncated =
-      issue.description.length > 200 ? issue.description.slice(0, 200) + '...' : issue.description;
-    lines.push('', chalk.dim(truncated));
+export function displayIssueContext(issue: IssueContext): void {
+  const sourceLabels: Record<string, string> = {
+    linear: 'Linear Issue',
+    jira: 'Jira Issue',
+    asana: 'Asana Task',
+    plain: 'Requirements',
+    none: 'Context',
+  };
+
+  const title = sourceLabels[issue.source] || 'Issue Context';
+
+  const lines: string[] = [];
+
+  // For plain text, just show the description
+  if (issue.source === 'plain') {
+    if (issue.description) {
+      const truncated =
+        issue.description.length > 300 ? issue.description.slice(0, 300) + '...' : issue.description;
+      lines.push(chalk.dim(truncated));
+    }
+  } else {
+    // For external issue trackers, show full context
+    lines.push(`${chalk.bold(issue.identifier)}: ${issue.title}`);
+
+    if (issue.labels.length > 0) {
+      lines.push(`Labels: ${issue.labels.map((l) => chalk.magenta(l)).join(', ')}`);
+    }
+
+    if (issue.description) {
+      const truncated =
+        issue.description.length > 200 ? issue.description.slice(0, 200) + '...' : issue.description;
+      lines.push('', chalk.dim(truncated));
+    }
+
+    if (issue.url) {
+      lines.push('', chalk.dim.underline(issue.url));
+    }
   }
 
   console.log(
     boxen(lines.join('\n'), {
-      title: 'Linear Issue',
+      title,
       padding: 1,
       borderColor: 'blue',
       borderStyle: 'round',
@@ -36,9 +61,25 @@ export function displayCommitPlan(groups: CommitGroup[], issueId?: string): void
     const ref = issueId && g.type !== 'chore' ? ` (${issueId})` : '';
     const header = `${chalk.bold.green(`${i + 1}.`)} ${chalk.bold(`${g.type}(${g.scope}): ${g.summary}`)}${chalk.dim(ref)}`;
     const files = g.files.map((f) => `   ${chalk.dim('•')} ${f}`).join('\n');
-    const rationale = g.rationale ? `   ${chalk.dim.italic(g.rationale)}` : '';
+
     lines.push(header, files);
-    if (rationale) lines.push(rationale);
+
+    // Show body if present (indented and dimmed)
+    if (g.body) {
+      const bodyLines = g.body.split('\n').map((line) => `   ${chalk.dim(line)}`).join('\n');
+      lines.push(bodyLines);
+    }
+
+    // Show what requirement this addresses
+    if (g.addresses) {
+      lines.push(`   ${chalk.cyan('Addresses:')} ${chalk.dim(g.addresses)}`);
+    }
+
+    // Show rationale (why files are grouped together)
+    if (g.rationale) {
+      lines.push(`   ${chalk.dim.italic(g.rationale)}`);
+    }
+
     lines.push('');
   }
 

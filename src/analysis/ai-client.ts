@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { GitShipConfig } from '../config/schema.js';
 import type { FileDiff } from '../git/diff.js';
-import type { LinearIssue } from '../linear/types.js';
+import type { IssueContext } from '../issue-tracker/types.js';
 import { truncateDiff } from '../git/diff.js';
 import { AIError } from '../utils/errors.js';
 
@@ -11,14 +11,56 @@ export interface AIGroupResult {
   files: string[];
   type: string;
   scope: string;
+  /** Short summary for commit header (subject line) */
   summary: string;
+  /** Detailed explanation for commit body (optional) */
+  body?: string;
+  /** Which part of the requirement/issue this commit addresses (optional) */
+  addresses?: string;
   rationale: string;
+}
+
+function buildIssueContextSection(issue: IssueContext | null): string {
+  if (!issue) return '';
+
+  const sourceLabels: Record<string, string> = {
+    linear: 'Linear Issue',
+    jira: 'Jira Issue',
+    asana: 'Asana Task',
+    plain: 'Requirements',
+    none: 'Context',
+  };
+
+  const label = sourceLabels[issue.source] || 'Issue Context';
+
+  if (issue.source === 'plain') {
+    // Plain text requirements - just show the description
+    return `
+## ${label}
+${issue.description ?? 'N/A'}
+`;
+  }
+
+  // External issue tracker - show full context
+  const lines = [
+    `## ${label}: ${issue.identifier} - ${issue.title}`,
+  ];
+
+  if (issue.description) {
+    lines.push(`Description: ${issue.description}`);
+  }
+
+  if (issue.labels.length > 0) {
+    lines.push(`Labels: ${issue.labels.join(', ')}`);
+  }
+
+  return '\n' + lines.join('\n') + '\n';
 }
 
 function buildPrompt(
   diffs: FileDiff[],
   heuristicGroups: Array<{ category: string; files: string[] }>,
-  issue: LinearIssue | null,
+  issue: IssueContext | null,
   maxMessageLength: number = 72,
 ): string {
   const fileList = diffs
@@ -33,9 +75,7 @@ function buildPrompt(
     .map((g) => `${g.category}: ${g.files.join(', ')}`)
     .join('\n');
 
-  const issueContext = issue
-    ? `\nLinear Issue: ${issue.identifier} - ${issue.title}\nDescription: ${issue.description ?? 'N/A'}\nLabels: ${issue.labels.join(', ')}\n`
-    : '';
+  const issueContext = buildIssueContextSection(issue);
 
   return `You are a commit grouping engine that balances two goals: **small, reviewable commits** and **safe revertability**. Your job is to split staged file changes into the smallest commits a reviewer can understand in isolation, while ensuring no single revert breaks the build or runtime.
 ${issueContext}
@@ -101,12 +141,30 @@ ${heuristicInfo}
 ${diffDetails}
 
 ## Commit Message Rules
+
+### Header (summary)
+- The header is the first line of the commit message
+- Keep the header under ${maxMessageLength} characters (this is a hard limit)
 - Use imperative mood (e.g. "add", "fix", "update" — NOT "added", "adding", "fixes")
-- Keep the summary under ${maxMessageLength} characters
-- Start the summary with a lowercase letter
-- Do NOT end the summary with a period
+- Start with a lowercase letter
+- Do NOT end with a period
 - Follow conventional commits format: type(scope): summary
 - Use conventional commit types: feat, fix, chore, docs, style, refactor, test, ci, build, perf
+
+### Body (detailed explanation)
+- The body provides context about WHAT changed and WHY
+- Include the body for any non-trivial changes
+- Explain the motivation, approach, or any important details
+- Keep each line under 72 characters for readability
+- Use bullet points for multiple changes
+- Skip the body only for trivial changes (typo fixes, formatting, etc.)
+
+### Addresses (requirement mapping)
+- If issue/requirements context is provided above, specify which part of the requirement this commit addresses
+- Be specific: quote or paraphrase the exact requirement being fulfilled
+- If the commit partially fulfills a requirement, say so (e.g., "Partially addresses: ...")
+- If no requirements context is provided, omit this field
+- This helps reviewers understand how the code maps to the original request
 
 ## Output Format
 
@@ -117,6 +175,8 @@ Every file must appear in exactly one group. Respond with ONLY a JSON array (no 
     "type": "feat",
     "scope": "auth",
     "summary": "add OAuth2 login flow",
+    "body": "Implement Google OAuth2 authentication:\\n- Add OAuth2 callback handler\\n- Store tokens securely in session\\n- Add logout endpoint to revoke tokens",
+    "addresses": "Implements 'Users should be able to log in with their Google account' from requirements",
     "rationale": "route imports createSession from service; reverting either alone would break the build"
   }
 ]`;
@@ -139,6 +199,8 @@ function parseAIResponse(text: string): AIGroupResult[] | null {
         type: (obj.type as string) ?? 'chore',
         scope: (obj.scope as string) ?? 'misc',
         summary: (obj.summary as string) ?? 'changes',
+        body: (obj.body as string) ?? undefined,
+        addresses: (obj.addresses as string) ?? undefined,
         rationale: (obj.rationale as string) ?? '',
       };
     });
@@ -199,12 +261,48 @@ async function callGemini(prompt: string, model: string): Promise<string> {
   return result.response.text();
 }
 
+/**
+ * Detect common API error patterns from response text or error messages.
+ * Returns a user-friendly message if a known error pattern is found.
+ */
+function detectAPIError(text: string): string | null {
+  const lowerText = text.toLowerCase();
+
+  // Quota / billing errors
+  if (lowerText.includes('quota') || lowerText.includes('rate limit') || lowerText.includes('rate_limit')) {
+    return 'API quota or rate limit exceeded';
+  }
+  if (lowerText.includes('billing') || lowerText.includes('payment') || lowerText.includes('insufficient_quota')) {
+    return 'API billing issue - check your account balance';
+  }
+
+  // Auth errors
+  if (lowerText.includes('invalid api key') || lowerText.includes('invalid_api_key') || lowerText.includes('unauthorized')) {
+    return 'Invalid API key';
+  }
+  if (lowerText.includes('authentication') || lowerText.includes('api key not found')) {
+    return 'API authentication failed';
+  }
+
+  // Model errors
+  if (lowerText.includes('model not found') || lowerText.includes('does not exist')) {
+    return 'AI model not found - check your configuration';
+  }
+
+  // Context length
+  if (lowerText.includes('context length') || lowerText.includes('too long') || lowerText.includes('max tokens')) {
+    return 'Request too large for AI model';
+  }
+
+  return null;
+}
+
 export async function analyzeWithAI(
   config: GitShipConfig,
   diffs: FileDiff[],
   heuristicGroups: Array<{ category: string; files: string[] }>,
-  issue: LinearIssue | null,
-): Promise<AIGroupResult[] | null> {
+  issue: IssueContext | null,
+): Promise<AIGroupResult[]> {
   const prompt = buildPrompt(diffs, heuristicGroups, issue, config.commits.maxMessageLength);
 
   try {
@@ -218,9 +316,28 @@ export async function analyzeWithAI(
       responseText = await callOpenAI(prompt, config.ai.model);
     }
 
-    return parseAIResponse(responseText);
+    // Check if response looks like an error message
+    const detectedError = detectAPIError(responseText);
+    if (detectedError) {
+      throw new AIError(detectedError);
+    }
+
+    const parsed = parseAIResponse(responseText);
+    if (!parsed || parsed.length === 0) {
+      throw new AIError('AI returned an invalid or empty response');
+    }
+
+    return parsed;
   } catch (error) {
     if (error instanceof AIError) throw error;
-    throw new AIError(`AI analysis failed: ${(error as Error).message}`, { cause: error });
+
+    // Check if the error message contains known API error patterns
+    const errorMessage = (error as Error).message;
+    const detectedError = detectAPIError(errorMessage);
+
+    throw new AIError(
+      detectedError ?? `AI analysis failed: ${errorMessage}`,
+      { cause: error }
+    );
   }
 }
