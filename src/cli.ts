@@ -27,7 +27,7 @@ import { CodexAdapter } from './review/codex.js';
 import { GraphiteAdapter } from './review/graphite.js';
 import { withSpinner } from './ui/spinner.js';
 import { displayIssueContext, displayCommitPlan, displayReviewResults, displayChangedFiles } from './ui/display.js';
-import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptAIFailureAction, promptPlainTextRequirements, promptCreatePR, promptPRTitle, promptPRDraft, promptEditPRBody, promptPRBodyEditor } from './ui/prompts.js';
+import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptAIFailureAction, promptPlainTextRequirements, promptCreatePR, promptPRTitle, promptPRDraft, promptEditPRBody, promptPRBodyEditor, promptFileSelection } from './ui/prompts.js';
 import { createPRAdapter, isPRSupported, generatePRTitle, generatePRBody, generatePRBodyWithAI } from './pr/index.js';
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
@@ -216,7 +216,14 @@ async function ship(options: {
   displayChangedFiles(changedFiles);
   logger.info(chalk.dim(`${changedFiles.length} file(s) changed`));
 
-  const filePaths = changedFiles.map((f) => f.path);
+  const selectedPaths = await promptFileSelection(changedFiles);
+  if (selectedPaths.length === 0) {
+    logger.info(chalk.dim('No files selected. Nothing to commit.'));
+    return;
+  }
+  const selectedFiles = changedFiles.filter((f) => selectedPaths.includes(f.path));
+
+  const filePaths = selectedFiles.map((f) => f.path);
   const diffs = await withSpinner('Parsing diffs', () =>
     getFileDiffs(git, filePaths),
   );

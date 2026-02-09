@@ -1,4 +1,4 @@
-import { select, input, confirm, editor } from "@inquirer/prompts";
+import { select, input, confirm, editor, checkbox } from "@inquirer/prompts";
 import type { CommitGroup } from "../analysis/grouper.js";
 
 export async function promptIssueId(
@@ -213,4 +213,18 @@ export async function promptPRBodyEditor(defaultBody: string): Promise<string> {
     default: defaultBody,
     postfix: ".md",
   });
+}
+
+export async function promptFileSelection(
+  files: Array<{ path: string; status: string }>,
+): Promise<string[]> {
+  const selected = await checkbox({
+    message: "Select files to include:",
+    choices: files.map((f) => ({
+      name: `${f.status} ${f.path}`,
+      value: f.path,
+      checked: true,
+    })),
+  });
+  return selected;
 }
