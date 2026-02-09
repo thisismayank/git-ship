@@ -323,30 +323,41 @@ A fast first pass groups files by path patterns:
 
 ### Pass 2 — AI refinement
 
-The AI reads every diff and applies two tests:
+The AI analyzes your changes and applies two tests:
 
 1. **The Revert Test** (safety floor) — _"If this commit were reverted, would the codebase still compile and run?"_ Files that depend on each other must stay together.
 2. **The Review Test** (quality goal) — _"Can a reviewer understand this commit without reading the others?"_ Prefer smaller, focused commits that each tell one clear story.
 
 When issue context is available (from Linear, Jira, Asana, or plain text), the AI uses it to better understand the intent of your changes and map commits to specific requirements.
 
+**Optimized for large changesets:** Instead of sending full diffs to the AI (which can cause truncation with many files), git-ship sends compressed summaries — changed symbols, imports, and exports — giving the AI everything it needs to group files in a fraction of the tokens. Lockfile diffs are skipped entirely (they always group with their manifest). Only ambiguous source files include a short diff excerpt.
+
 ### AI Failure Handling
 
-If the AI call fails (e.g., API quota exceeded, rate limit, invalid key), git-ship:
+If the AI call fails (e.g., API quota exceeded, rate limit, invalid key, response truncation), git-ship:
 
-1. Shows a prominent error message with the reason
-2. Displays a suggestion for fixing the issue
+1. Shows a clear, user-friendly error message explaining what went wrong
+2. Displays a context-specific suggestion for fixing the issue
 3. Lets you choose: **Continue with basic commits**, **Retry**, or **Cancel**
 
 ```
 ✖ AI commit analysis failed
-✖ API quota or rate limit exceeded
+✖ API quota or rate limit exceeded (openai/gpt-4o)
   Suggestion: Check your OPENAI_API_KEY or ANTHROPIC_API_KEY env var.
 
 ? How would you like to proceed?
 ❯ Continue with basic commits (generic messages)
   Retry AI analysis
   Cancel
+```
+
+For response truncation (too many files for the AI to process):
+
+```
+✖ AI commit analysis failed
+✖ The AI response (2048 chars) could not be parsed as valid JSON — it was likely cut off before completing.
+  Suggestion: This usually means there were too many files for the AI to process at once.
+              Try staging fewer files, or commit in smaller batches.
 ```
 
 ### Fallback
