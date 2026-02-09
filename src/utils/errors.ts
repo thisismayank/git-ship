@@ -19,10 +19,10 @@ export class LinearError extends GitShipError {
 }
 
 export class AIError extends GitShipError {
-  constructor(message: string, options?: { cause?: unknown }) {
+  constructor(message: string, options?: { suggestion?: string; cause?: unknown }) {
     super(message, {
-      suggestion: 'Check your OPENAI_API_KEY or ANTHROPIC_API_KEY env var.',
-      ...options,
+      suggestion: options?.suggestion ?? 'Check your OPENAI_API_KEY or ANTHROPIC_API_KEY env var.',
+      cause: options?.cause,
     });
     this.name = 'AIError';
   }

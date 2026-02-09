@@ -57,6 +57,92 @@ ${issue.description ?? 'N/A'}
   return '\n' + lines.join('\n') + '\n';
 }
 
+const LOCKFILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']);
+const CLEAR_CATEGORIES = new Set(['deps', 'docs', 'test', 'ci-infra', 'migration']);
+
+/**
+ * Extract a compact summary of what changed in a diff — symbols, imports,
+ * exports — so the AI can group files without needing full diff hunks.
+ */
+function summarizeDiff(diff: FileDiff): string {
+  const lines: string[] = [];
+  const addedImports: string[] = [];
+  const removedImports: string[] = [];
+  const addedSymbols: string[] = [];
+  const removedSymbols: string[] = [];
+
+  for (const hunk of diff.hunks) {
+    for (const line of hunk.content.split('\n')) {
+      // Import / require changes
+      if (/^\+\s*(import\s|.*require\()/.test(line)) {
+        addedImports.push(line.slice(1).trim());
+      } else if (/^-\s*(import\s|.*require\()/.test(line)) {
+        removedImports.push(line.slice(1).trim());
+      }
+      // Function / class / export declarations
+      else if (/^\+\s*(export\s|function\s|class\s|const\s+\w+\s*=|async\s+function)/.test(line)) {
+        const match = line.match(/(?:export\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+(\w+)/);
+        if (match) addedSymbols.push(match[1]);
+      } else if (/^-\s*(export\s|function\s|class\s|const\s+\w+\s*=|async\s+function)/.test(line)) {
+        const match = line.match(/(?:export\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+(\w+)/);
+        if (match) removedSymbols.push(match[1]);
+      }
+    }
+  }
+
+  if (addedImports.length) lines.push(`  +imports: ${addedImports.join('; ')}`);
+  if (removedImports.length) lines.push(`  -imports: ${removedImports.join('; ')}`);
+  if (addedSymbols.length) lines.push(`  +symbols: ${addedSymbols.join(', ')}`);
+  if (removedSymbols.length) lines.push(`  -symbols: ${removedSymbols.join(', ')}`);
+
+  return lines.length ? lines.join('\n') : '  (no notable symbol changes)';
+}
+
+/**
+ * Build the compressed diff section for the AI prompt.
+ * - Lockfiles: filename only (no diff content)
+ * - Clearly-categorized files (deps, docs, test, ci-infra, migration): summary only
+ * - Source files (ambiguous): summary + short diff excerpt (500 chars)
+ */
+function buildDiffSection(
+  diffs: FileDiff[],
+  heuristicGroups: Array<{ category: string; files: string[] }>,
+): string {
+  // Build a map of file → category for quick lookup
+  const fileCategory = new Map<string, string>();
+  for (const g of heuristicGroups) {
+    for (const f of g.files) {
+      fileCategory.set(f, g.category);
+    }
+  }
+
+  const sections: string[] = [];
+
+  for (const d of diffs) {
+    const basename = d.path.split('/').pop() ?? d.path;
+    const category = fileCategory.get(d.path) ?? '';
+
+    // Lockfiles: filename only, no diff content
+    if (LOCKFILES.has(basename)) {
+      sections.push(`=== ${d.path} === (lockfile, grouped with manifest)`);
+      continue;
+    }
+
+    // Clearly-categorized files: summary only
+    if (CLEAR_CATEGORIES.has(category)) {
+      sections.push(`=== ${d.path} ===\n${summarizeDiff(d)}`);
+      continue;
+    }
+
+    // Source / ambiguous files: summary + short diff excerpt
+    const summary = summarizeDiff(d);
+    const excerpt = truncateDiff(d, 500);
+    sections.push(`=== ${d.path} ===\n${summary}\n--- diff excerpt ---\n${excerpt}`);
+  }
+
+  return sections.join('\n\n');
+}
+
 function buildPrompt(
   diffs: FileDiff[],
   heuristicGroups: Array<{ category: string; files: string[] }>,
@@ -67,9 +153,7 @@ function buildPrompt(
     .map((d) => `- ${d.path} (${d.status}, +${d.additions}/-${d.deletions})`)
     .join('\n');
 
-  const diffDetails = diffs
-    .map((d) => `=== ${d.path} ===\n${truncateDiff(d, 1500)}`)
-    .join('\n\n');
+  const diffSection = buildDiffSection(diffs, heuristicGroups);
 
   const heuristicInfo = heuristicGroups
     .map((g) => `${g.category}: ${g.files.join(', ')}`)
@@ -137,8 +221,8 @@ ${fileList}
 ## Heuristic Pre-Groups (use as a starting hint, override freely)
 ${heuristicInfo}
 
-## Diffs
-${diffDetails}
+## Diffs (compressed — summaries of changed symbols & imports; short excerpts for ambiguous files)
+${diffSection}
 
 ## Commit Message Rules
 
@@ -224,7 +308,7 @@ async function callOpenAI(prompt: string, model: string): Promise<string> {
       { role: 'user', content: prompt },
     ],
     temperature: 0.2,
-    max_tokens: 4096,
+    max_tokens: 16384,
   });
 
   return response.choices[0]?.message?.content ?? '';
@@ -237,7 +321,7 @@ async function callAnthropic(prompt: string, model: string): Promise<string> {
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 16384,
     messages: [{ role: 'user', content: prompt }],
     system: 'You are a git commit grouping engine that balances reviewability and revertability. You produce the smallest, most reviewer-friendly commits that are each safe to revert independently. Respond only with valid JSON.',
   });
@@ -254,7 +338,7 @@ async function callGemini(prompt: string, model: string): Promise<string> {
   const genModel = client.getGenerativeModel({
     model,
     systemInstruction: 'You are a git commit grouping engine that balances reviewability and revertability. You produce the smallest, most reviewer-friendly commits that are each safe to revert independently. Respond only with valid JSON.',
-    generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+    generationConfig: { temperature: 0.2, maxOutputTokens: 16384 },
   });
 
   const result = await genModel.generateContent(prompt);
@@ -316,28 +400,25 @@ export async function analyzeWithAI(
       responseText = await callOpenAI(prompt, config.ai.model);
     }
 
-    // Check if response looks like an error message
-    const detectedError = detectAPIError(responseText);
-    if (detectedError) {
-      throw new AIError(detectedError);
-    }
-
     const parsed = parseAIResponse(responseText);
     if (!parsed || parsed.length === 0) {
-      throw new AIError('AI returned an invalid or empty response');
+      const detail = responseText.length === 0
+        ? 'The AI returned an empty response.'
+        : `The AI response (${responseText.length} chars) could not be parsed as valid JSON — it was likely cut off before completing.`;
+      throw new AIError(detail, {
+        suggestion: 'This usually means there were too many files for the AI to process at once. Try staging fewer files, or commit in smaller batches.',
+      });
     }
 
     return parsed;
   } catch (error) {
     if (error instanceof AIError) throw error;
 
-    // Check if the error message contains known API error patterns
     const errorMessage = (error as Error).message;
-    const detectedError = detectAPIError(errorMessage);
-
-    throw new AIError(
-      detectedError ?? `AI analysis failed: ${errorMessage}`,
-      { cause: error }
-    );
+    const apiError = detectAPIError(errorMessage);
+    const detail = apiError
+      ? `${apiError} (${config.ai.provider}/${config.ai.model})`
+      : `AI analysis failed (${config.ai.provider}/${config.ai.model}): ${errorMessage}`;
+    throw new AIError(detail, { cause: error });
   }
 }
