@@ -31,6 +31,8 @@ Stop writing commit messages. `git-ship` reads your diffs, groups related change
 - [Commit Message Structure](#commit-message-structure)
 - [Branch Parsing](#branch-parsing)
 - [Commit Grouping](#commit-grouping)
+- [Ignore Patterns](#ignore-patterns)
+- [Interactive File Selection](#interactive-file-selection)
 - [Code Review](#code-review)
 - [Pull Request Creation](#pull-request-creation)
 - [Configuration](#configuration)
@@ -59,7 +61,7 @@ $ git-ship
 
 [1/8] Detect branch        → parse issue ID from branch name (e.g., feat/ENG-123-...)
 [2/8] Fetch issue context  → pull from Linear, Jira, Asana, or enter plain text
-[3/8] Collect changes      → structured diffs for all changed files
+[3/8] Collect changes      → pick files interactively, then parse structured diffs
 [4/8] Group into commits   → heuristic pre-group, then AI refines into revertable commits
 [5/8] Review commit plan   → accept / edit messages / regroup / cancel
 [6/8] Code review          → CodeRabbit, Devin, Codex, or Graphite
@@ -173,7 +175,8 @@ gs config path
 | **Rich commit messages**  | Header (limited length) + body (detailed explanation) + footer (requirement mapping)                                                     |
 | **Code review gate**      | Runs CodeRabbit, Devin, Codex, or Graphite before pushing. Critical findings block the push.                                             |
 | **Conventional commits**  | Enforces type, scope, imperative mood, configurable length — no more inconsistent commit history                                         |
-| **Smart file filtering**  | Automatically ignores `node_modules`, `.env*`, `dist`, `.DS_Store`, `.gitshiprc.json` — configurable via `ignorePatterns`                |
+| **Smart file filtering**  | Automatically ignores `node_modules`, `.env*`, `dist`, `.DS_Store` — configurable via `ignorePatterns`                                   |
+| **Interactive file picker** | Choose exactly which changed files to include — skip local config tweaks or cherry-pick files across branches                           |
 | **Global + local config** | One-time setup works across all repos; override per-repo when needed                                                                     |
 
 ## Issue Tracker Integration
@@ -259,7 +262,7 @@ fix(cart): resolve race condition in quantity update
 
 ## Commit Message Structure
 
-git-ship generates rich, structured commit messages:
+git-ship generates rich, structured commit messages with three distinct sections:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -275,9 +278,22 @@ git-ship generates rich, structured commit messages:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-- **Header**: Short summary shown in `git log`, limited to your configured length (default: 72)
-- **Body**: Detailed explanation of what changed and why — no length limit
-- **Footer**: Links commit to specific requirements + issue reference
+### Header
+
+The first line of the commit, shown in `git log --oneline` and PR merge lists. Limited to your configured `maxMessageLength` (default: 72 characters). The length budget accounts for the `type(scope): ` prefix — if `feat(auth): ` takes 12 characters, the summary gets the remaining 60. Summaries that exceed the limit are automatically truncated with `...`.
+
+### Body
+
+A detailed explanation of *what* changed and *why*. The body has **no length limit** — write as much context as needed. Lines are automatically word-wrapped at 72 characters for readability in terminals and `git log`, preserving bullet-point indentation. The AI generates the body for any non-trivial change; trivial changes (typo fixes, formatting) skip it.
+
+### Footer
+
+The footer maps commits back to requirements and issue references:
+
+- **`Addresses:`** — Quotes or paraphrases the specific requirement this commit fulfills. Only present when issue context or plain-text requirements are provided. Helps reviewers understand *why* a change was made without switching to the issue tracker.
+- **`Refs:`** — The issue ID (e.g., `Refs: ENG-123`). Only present when `commits.includeIssueRef` is `true` and an issue ID was detected or provided.
+
+The footer is separated from the body by a blank line, following the [Conventional Commits](https://www.conventionalcommits.org/) trailer format.
 
 ## Branch Parsing
 
@@ -355,14 +371,77 @@ For response truncation (too many files for the AI to process):
 
 ```
 ✖ AI commit analysis failed
-✖ The AI response (2048 chars) could not be parsed as valid JSON — it was likely cut off before completing.
-  Suggestion: This usually means there were too many files for the AI to process at once.
-              Try staging fewer files, or commit in smaller batches.
+✖ The AI could not finish analyzing all your files — its response was cut off.
+  Suggestion: Stage fewer files and commit in smaller batches,
+              or choose "Continue with basic commits" to skip AI grouping.
 ```
 
 ### Fallback
 
 If AI is unavailable or you choose to continue without it, heuristic groups from Pass 1 are used directly with auto-generated conventional commit messages.
+
+## Ignore Patterns
+
+git-ship automatically filters out files that should never be committed. The default ignore patterns are:
+
+```json
+{
+  "ignorePatterns": [
+    "node_modules/**",
+    ".env*",
+    "dist/**",
+    ".DS_Store"
+  ]
+}
+```
+
+You can customize this list in your `.gitshiprc.json` to exclude additional files:
+
+```json
+{
+  "ignorePatterns": [
+    "node_modules/**",
+    ".env*",
+    "dist/**",
+    ".DS_Store",
+    "coverage/**",
+    "*.generated.ts",
+    ".gitshiprc.json"
+  ]
+}
+```
+
+### Supported Pattern Syntax
+
+| Pattern        | Matches                                             | Example                         |
+| -------------- | --------------------------------------------------- | ------------------------------- |
+| `dir/**`       | Any path under that directory                       | `dist/**` matches `dist/main.js` |
+| `prefix*`      | Any filename starting with prefix                   | `.env*` matches `.env.local`    |
+| `exact`        | Exact match against full path or basename           | `.DS_Store` matches anywhere    |
+
+Files matching any ignore pattern are silently excluded before the file picker and AI analysis — they never appear in the workflow.
+
+## Interactive File Selection
+
+After collecting changed files, git-ship presents an interactive checkbox picker so you can choose exactly which files to include in this commit session:
+
+```
+? Select files to include:
+  ◉ M src/api/routes.ts
+  ◉ M src/services/auth.ts
+  ◯ M vite.config.ts
+  ◉ A src/utils/helpers.ts
+```
+
+All files are checked by default. Deselect any files you want to skip — they remain as uncommitted changes in your working tree.
+
+**Use cases:**
+
+- **Skip local config changes** — Deselect `vite.config.ts`, `.eslintrc`, or other local tweaks you never intend to commit
+- **Cherry-pick files across branches** — When multiple developers or agents are editing the same repo, select only the files relevant to your current task
+- **Incremental commits** — Commit part of a large changeset now, come back for the rest later
+
+The picker appears after ignore-pattern filtering, so you only see files that are eligible for committing. If you deselect everything, git-ship exits with "No files selected."
 
 ## Code Review
 
