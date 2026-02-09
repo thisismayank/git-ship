@@ -242,6 +242,10 @@ When you run `gs`, you'll be prompted:
 ? Enter the requirements or context for these changes: Add user authentication with OAuth2
 ```
 
+<p align="center">
+  <img src="docs/screenshots/git-ship-add-requirements.png" alt="git-ship manual requirements and file selection" width="700" />
+</p>
+
 ### None
 
 Skip issue context entirely. Commits will be based on diffs only.
@@ -470,6 +474,10 @@ At the end of the `gs` workflow, you'll be prompted:
 ? Create as draft PR? No
 ✓ Pull request created: https://github.com/user/repo/pull/123
 ```
+
+<p align="center">
+  <img src="docs/screenshots/git-ship-pr.png" alt="git-ship pull request creation" width="700" />
+</p>
 
 ### Standalone PR Command
 
