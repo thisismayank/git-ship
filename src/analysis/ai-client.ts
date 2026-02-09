@@ -102,11 +102,14 @@ function summarizeDiff(diff: FileDiff): string {
  * Build the compressed diff section for the AI prompt.
  * - Lockfiles: filename only (no diff content)
  * - Clearly-categorized files (deps, docs, test, ci-infra, migration): summary only
- * - Source files (ambiguous): summary + short diff excerpt (500 chars)
+ * - Source files (ambiguous): summary + short diff excerpt
+ *
+ * @param excerptChars Max chars for each source-file diff excerpt (0 = summaries only)
  */
 function buildDiffSection(
   diffs: FileDiff[],
   heuristicGroups: Array<{ category: string; files: string[] }>,
+  excerptChars: number = 500,
 ): string {
   // Build a map of file → category for quick lookup
   const fileCategory = new Map<string, string>();
@@ -134,10 +137,14 @@ function buildDiffSection(
       continue;
     }
 
-    // Source / ambiguous files: summary + short diff excerpt
+    // Source / ambiguous files: summary + optional diff excerpt
     const summary = summarizeDiff(d);
-    const excerpt = truncateDiff(d, 500);
-    sections.push(`=== ${d.path} ===\n${summary}\n--- diff excerpt ---\n${excerpt}`);
+    if (excerptChars > 0) {
+      const excerpt = truncateDiff(d, excerptChars);
+      sections.push(`=== ${d.path} ===\n${summary}\n--- diff excerpt ---\n${excerpt}`);
+    } else {
+      sections.push(`=== ${d.path} ===\n${summary}`);
+    }
   }
 
   return sections.join('\n\n');
@@ -148,18 +155,91 @@ function buildPrompt(
   heuristicGroups: Array<{ category: string; files: string[] }>,
   issue: IssueContext | null,
   maxMessageLength: number = 72,
+  excerptCharsOverride?: number,
+  forceCompact: boolean = false,
 ): string {
+  // Adaptive excerpt sizing: budget ~4000 chars total across all files
+  const excerptChars = excerptCharsOverride ?? Math.max(150, Math.floor(4000 / diffs.length));
+
   const fileList = diffs
     .map((d) => `- ${d.path} (${d.status}, +${d.additions}/-${d.deletions})`)
     .join('\n');
 
-  const diffSection = buildDiffSection(diffs, heuristicGroups);
+  const diffSection = buildDiffSection(diffs, heuristicGroups, excerptChars);
 
   const heuristicInfo = heuristicGroups
     .map((g) => `${g.category}: ${g.files.join(', ')}`)
     .join('\n');
 
   const issueContext = buildIssueContextSection(issue);
+
+  const isLargeChangeset = forceCompact || diffs.length > 8;
+
+  const workedExamples = isLargeChangeset ? '' : `
+## Worked Examples
+
+**Example 1 — Coupled feature files → single commit**
+\`src/api/routes/payments.ts\` adds a new endpoint that calls \`createCharge()\`.
+\`src/services/payments.ts\` exports \`createCharge()\`.
+→ Group together. Reverting only the route would leave dead code; reverting only the service would break the route. These are small enough to review as one unit.
+
+**Example 2 — Independent refactor + unrelated feature → separate commits**
+\`src/utils/format-date.ts\` refactors date formatting (no new exports consumed by other diffs).
+\`src/api/routes/users.ts\` adds a profile endpoint.
+→ Separate. Each change compiles and runs without the other, and a reviewer benefits from seeing them independently.
+
+**Example 3 — Feature files + tests**
+\`src/routes/orders.ts\`, \`src/controllers/orders.ts\`, \`src/services/orders.ts\` — all tightly coupled for a new "cancel order" feature.
+\`src/tests/orders.test.ts\` — tests that exercise the feature.
+→ Group feature files together. Include the tests in the same commit — a reviewer understanding the feature benefits from seeing the tests alongside the implementation, and tests alone don't break production if reverted.
+
+**Example 4 — Large feature that can be layered**
+\`src/models/subscription.ts\` adds a Subscription model with no external callers yet.
+\`src/services/billing.ts\` imports Subscription and adds billing logic.
+\`src/routes/billing.ts\` imports the billing service and exposes endpoints.
+→ Three commits if each layer compiles alone (model → service → route). A reviewer sees the data model first, then the logic, then the API surface. If the service can't compile without the route (circular dependency), group them.
+`;
+
+  const bodyRules = isLargeChangeset ? '' : `
+### Body (detailed explanation)
+- The body provides context about WHAT changed and WHY
+- Include the body for any non-trivial changes
+- Explain the motivation, approach, or any important details
+- Keep each line under 72 characters for readability
+- Use bullet points for multiple changes
+- Skip the body only for trivial changes (typo fixes, formatting, etc.)
+
+### Addresses (requirement mapping)
+- If issue/requirements context is provided above, specify which part of the requirement this commit addresses
+- Be specific: quote or paraphrase the exact requirement being fulfilled
+- If the commit partially fulfills a requirement, say so (e.g., "Partially addresses: ...")
+- If no requirements context is provided, omit this field
+- This helps reviewers understand how the code maps to the original request`;
+
+  const compactInstruction = isLargeChangeset
+    ? '\nKeep output compact: omit body, addresses, and rationale fields to stay within token limits.\n'
+    : '';
+
+  const outputExample = isLargeChangeset
+    ? `[
+  {
+    "files": ["path/to/file1", "path/to/file2"],
+    "type": "feat",
+    "scope": "auth",
+    "summary": "add OAuth2 login flow"
+  }
+]`
+    : `[
+  {
+    "files": ["path/to/file1", "path/to/file2"],
+    "type": "feat",
+    "scope": "auth",
+    "summary": "add OAuth2 login flow",
+    "body": "Implement Google OAuth2 authentication:\\n- Add OAuth2 callback handler\\n- Store tokens securely in session\\n- Add logout endpoint to revoke tokens",
+    "addresses": "Implements 'Users should be able to log in with their Google account' from requirements",
+    "rationale": "route imports createSession from service; reverting either alone would break the build"
+  }
+]`;
 
   return `You are a commit grouping engine that balances two goals: **small, reviewable commits** and **safe revertability**. Your job is to split staged file changes into the smallest commits a reviewer can understand in isolation, while ensuring no single revert breaks the build or runtime.
 ${issueContext}
@@ -185,30 +265,7 @@ When these two goals conflict, the Revert Test wins — never produce a commit t
 - Infrastructure / config changes (CI, lockfiles, tsconfig) don't depend on feature code in this diff.
 - A generic utility was refactored and also happens to be used by a new feature — if the refactor works on its own, it gets its own commit.
 - A large feature can be split into layers (e.g. data layer, then API layer) where earlier layers compile on their own — prefer the split for reviewability.
-
-## Worked Examples
-
-**Example 1 — Coupled feature files → single commit**
-\`src/api/routes/payments.ts\` adds a new endpoint that calls \`createCharge()\`.
-\`src/services/payments.ts\` exports \`createCharge()\`.
-→ Group together. Reverting only the route would leave dead code; reverting only the service would break the route. These are small enough to review as one unit.
-
-**Example 2 — Independent refactor + unrelated feature → separate commits**
-\`src/utils/format-date.ts\` refactors date formatting (no new exports consumed by other diffs).
-\`src/api/routes/users.ts\` adds a profile endpoint.
-→ Separate. Each change compiles and runs without the other, and a reviewer benefits from seeing them independently.
-
-**Example 3 — Feature files + tests**
-\`src/routes/orders.ts\`, \`src/controllers/orders.ts\`, \`src/services/orders.ts\` — all tightly coupled for a new "cancel order" feature.
-\`src/tests/orders.test.ts\` — tests that exercise the feature.
-→ Group feature files together. Include the tests in the same commit — a reviewer understanding the feature benefits from seeing the tests alongside the implementation, and tests alone don't break production if reverted.
-
-**Example 4 — Large feature that can be layered**
-\`src/models/subscription.ts\` adds a Subscription model with no external callers yet.
-\`src/services/billing.ts\` imports Subscription and adds billing logic.
-\`src/routes/billing.ts\` imports the billing service and exposes endpoints.
-→ Three commits if each layer compiles alone (model → service → route). A reviewer sees the data model first, then the logic, then the API surface. If the service can't compile without the route (circular dependency), group them.
-
+${workedExamples}
 ## Special Cases
 - **Tests & specs**: Group with the feature they test — reviewers benefit from seeing implementation and tests together. Only separate tests into their own commit when they cover existing (unchanged) code.
 - **Documentation / README**: Always a separate commit.
@@ -234,60 +291,65 @@ ${diffSection}
 - Do NOT end with a period
 - Follow conventional commits format: type(scope): summary
 - Use conventional commit types: feat, fix, chore, docs, style, refactor, test, ci, build, perf
-
-### Body (detailed explanation)
-- The body provides context about WHAT changed and WHY
-- Include the body for any non-trivial changes
-- Explain the motivation, approach, or any important details
-- Keep each line under 72 characters for readability
-- Use bullet points for multiple changes
-- Skip the body only for trivial changes (typo fixes, formatting, etc.)
-
-### Addresses (requirement mapping)
-- If issue/requirements context is provided above, specify which part of the requirement this commit addresses
-- Be specific: quote or paraphrase the exact requirement being fulfilled
-- If the commit partially fulfills a requirement, say so (e.g., "Partially addresses: ...")
-- If no requirements context is provided, omit this field
-- This helps reviewers understand how the code maps to the original request
-
+${bodyRules}
 ## Output Format
-
+${compactInstruction}
 Every file must appear in exactly one group. Respond with ONLY a JSON array (no markdown fencing, no commentary):
-[
-  {
-    "files": ["path/to/file1", "path/to/file2"],
-    "type": "feat",
-    "scope": "auth",
-    "summary": "add OAuth2 login flow",
-    "body": "Implement Google OAuth2 authentication:\\n- Add OAuth2 callback handler\\n- Store tokens securely in session\\n- Add logout endpoint to revoke tokens",
-    "addresses": "Implements 'Users should be able to log in with their Google account' from requirements",
-    "rationale": "route imports createSession from service; reverting either alone would break the build"
-  }
-]`;
+${outputExample}`;
 }
 
-function parseAIResponse(text: string): AIGroupResult[] | null {
+interface ParseResult {
+  groups: AIGroupResult[];
+  partial: boolean;
+}
+
+function mapItem(item: unknown): AIGroupResult {
+  const obj = item as Record<string, unknown>;
+  return {
+    files: (obj.files as string[]) ?? [],
+    type: (obj.type as string) ?? 'chore',
+    scope: (obj.scope as string) ?? 'misc',
+    summary: (obj.summary as string) ?? 'changes',
+    body: (obj.body as string) ?? undefined,
+    addresses: (obj.addresses as string) ?? undefined,
+    rationale: (obj.rationale as string) ?? '',
+  };
+}
+
+function parseAIResponse(text: string): ParseResult | null {
   try {
-    // Try to extract JSON array from response
+    // Try to extract a complete JSON array from response
     const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return null;
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as unknown[];
+      if (!Array.isArray(parsed)) return null;
+      return { groups: parsed.map(mapItem), partial: false };
+    }
 
-    const parsed = JSON.parse(jsonMatch[0]) as unknown[];
+    // Fallback: response was truncated (no closing `]`).
+    // Find the opening bracket, then walk backward to find the last
+    // complete JSON object and close the array ourselves.
+    const openBracket = text.indexOf('[');
+    if (openBracket === -1) return null;
 
-    if (!Array.isArray(parsed)) return null;
+    const fragment = text.slice(openBracket);
 
-    return parsed.map((item) => {
-      const obj = item as Record<string, unknown>;
-      return {
-        files: (obj.files as string[]) ?? [],
-        type: (obj.type as string) ?? 'chore',
-        scope: (obj.scope as string) ?? 'misc',
-        summary: (obj.summary as string) ?? 'changes',
-        body: (obj.body as string) ?? undefined,
-        addresses: (obj.addresses as string) ?? undefined,
-        rationale: (obj.rationale as string) ?? '',
-      };
-    });
+    // Walk backward from end to find the last `}` that closes a full object
+    for (let i = fragment.length - 1; i >= 0; i--) {
+      if (fragment[i] === '}') {
+        const candidate = fragment.slice(0, i + 1) + ']';
+        try {
+          const parsed = JSON.parse(candidate) as unknown[];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return { groups: parsed.map(mapItem), partial: true };
+          }
+        } catch {
+          // Not valid yet — keep walking backward
+        }
+      }
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -381,44 +443,215 @@ function detectAPIError(text: string): string | null {
   return null;
 }
 
+/**
+ * Call the configured AI provider with a prompt.
+ */
+async function callProvider(config: GitShipConfig, prompt: string): Promise<string> {
+  if (config.ai.provider === 'anthropic') {
+    return callAnthropic(prompt, config.ai.model);
+  } else if (config.ai.provider === 'gemini') {
+    return callGemini(prompt, config.ai.model ?? 'gemini-3-flash-preview');
+  } else {
+    return callOpenAI(prompt, config.ai.model);
+  }
+}
+
+/**
+ * Split files into chunks of ~chunkSize, keeping heuristic group members
+ * together so coupled files stay in the same AI call.
+ */
+function chunkDiffs(
+  diffs: FileDiff[],
+  heuristicGroups: Array<{ category: string; files: string[] }>,
+  chunkSize: number = 10,
+): { diffs: FileDiff[]; groups: Array<{ category: string; files: string[] }> }[] {
+  const diffMap = new Map(diffs.map((d) => [d.path, d]));
+  const assigned = new Set<string>();
+  const chunks: { diffs: FileDiff[]; groups: Array<{ category: string; files: string[] }> }[] = [];
+
+  let currentChunkDiffs: FileDiff[] = [];
+  let currentChunkGroups: Array<{ category: string; files: string[] }> = [];
+
+  for (const group of heuristicGroups) {
+    const groupDiffs = group.files
+      .filter((f) => diffMap.has(f))
+      .map((f) => diffMap.get(f)!);
+
+    // If adding this group exceeds chunk size and current chunk is non-empty, flush
+    if (currentChunkDiffs.length > 0 && currentChunkDiffs.length + groupDiffs.length > chunkSize) {
+      chunks.push({ diffs: currentChunkDiffs, groups: currentChunkGroups });
+      currentChunkDiffs = [];
+      currentChunkGroups = [];
+    }
+
+    // If a single group is larger than chunkSize, it becomes its own chunk
+    if (groupDiffs.length > chunkSize && currentChunkDiffs.length === 0) {
+      chunks.push({ diffs: groupDiffs, groups: [group] });
+      for (const d of groupDiffs) assigned.add(d.path);
+      continue;
+    }
+
+    currentChunkDiffs.push(...groupDiffs);
+    currentChunkGroups.push(group);
+    for (const d of groupDiffs) assigned.add(d.path);
+  }
+
+  // Add any remaining diffs not covered by heuristic groups
+  const ungroupedDiffs = diffs.filter((d) => !assigned.has(d.path));
+  if (ungroupedDiffs.length > 0) {
+    const ungroupedGroup = { category: 'source', files: ungroupedDiffs.map((d) => d.path) };
+    currentChunkDiffs.push(...ungroupedDiffs);
+    currentChunkGroups.push(ungroupedGroup);
+  }
+
+  // Flush remaining
+  if (currentChunkDiffs.length > 0) {
+    chunks.push({ diffs: currentChunkDiffs, groups: currentChunkGroups });
+  }
+
+  return chunks;
+}
+
+/**
+ * Analyze a large changeset (>20 files) by splitting into chunks,
+ * running parallel AI calls, and merging/deduplicating results.
+ */
+async function analyzeChunked(
+  config: GitShipConfig,
+  diffs: FileDiff[],
+  heuristicGroups: Array<{ category: string; files: string[] }>,
+  issue: IssueContext | null,
+): Promise<AIGroupResult[]> {
+  const chunks = chunkDiffs(diffs, heuristicGroups);
+
+  const chunkResults = await Promise.all(
+    chunks.map(async (chunk) => {
+      // Each chunk gets its own retry loop via analyzeWithRetry
+      return analyzeWithRetry(config, chunk.diffs, chunk.groups, issue);
+    }),
+  );
+
+  // Merge results and deduplicate files across chunks
+  const seenFiles = new Set<string>();
+  const merged: AIGroupResult[] = [];
+
+  for (const groups of chunkResults) {
+    for (const group of groups) {
+      const uniqueFiles = group.files.filter((f) => !seenFiles.has(f));
+      if (uniqueFiles.length > 0) {
+        merged.push({ ...group, files: uniqueFiles });
+        for (const f of uniqueFiles) seenFiles.add(f);
+      }
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Core retry logic: up to 3 attempts with progressive compression.
+ *
+ * | Attempt | Compression                                              |
+ * |---------|----------------------------------------------------------|
+ * | 1       | Normal prompt (adaptive excerpts)                        |
+ * | 2       | Halve excerptChars, force compact (strip examples/body)  |
+ * | 3       | Zero excerpts (summaries only), force compact            |
+ */
+async function analyzeWithRetry(
+  config: GitShipConfig,
+  diffs: FileDiff[],
+  heuristicGroups: Array<{ category: string; files: string[] }>,
+  issue: IssueContext | null,
+): Promise<AIGroupResult[]> {
+  const baseExcerpt = Math.max(150, Math.floor(4000 / diffs.length));
+
+  const attempts: { excerptChars?: number; forceCompact: boolean }[] = [
+    { forceCompact: false },                                           // attempt 1: adaptive defaults
+    { excerptChars: Math.floor(baseExcerpt / 2), forceCompact: true }, // attempt 2: halved + compact
+    { excerptChars: 0, forceCompact: true },                           // attempt 3: summaries only
+  ];
+
+  let lastError: unknown;
+
+  for (let i = 0; i < attempts.length; i++) {
+    const { excerptChars, forceCompact } = attempts[i];
+    const prompt = buildPrompt(
+      diffs,
+      heuristicGroups,
+      issue,
+      config.commits.maxMessageLength,
+      excerptChars,
+      forceCompact,
+    );
+
+    try {
+      const responseText = await callProvider(config, prompt);
+      const result = parseAIResponse(responseText);
+
+      if (result && result.groups.length > 0) {
+        if (result.partial) {
+          console.warn(
+            '⚠ AI response was truncated — recovered %d group(s). Some files may fall back to heuristic grouping.',
+            result.groups.length,
+          );
+        }
+        return result.groups;
+      }
+
+      // Response was empty or unparseable — try next compression level
+      const detail = responseText.length === 0
+        ? 'The AI returned an empty response'
+        : 'The AI response was truncated or unparseable';
+
+      if (i < attempts.length - 1) {
+        console.warn('⚠ %s (attempt %d/%d) — retrying with more compression…', detail, i + 1, attempts.length);
+      }
+      lastError = new AIError(detail);
+    } catch (error) {
+      if (error instanceof AIError) {
+        lastError = error;
+      } else {
+        const errorMessage = (error as Error).message;
+        const apiError = detectAPIError(errorMessage);
+
+        // Non-retryable errors (auth, billing, model not found) — throw immediately
+        if (apiError && !apiError.includes('too large')) {
+          throw new AIError(`${apiError} (${config.ai.provider}/${config.ai.model})`, { cause: error });
+        }
+
+        lastError = error;
+      }
+
+      if (i < attempts.length - 1) {
+        console.warn('⚠ AI call failed (attempt %d/%d) — retrying with more compression…', i + 1, attempts.length);
+      }
+    }
+  }
+
+  // All 3 attempts failed
+  if (lastError instanceof AIError) throw lastError;
+
+  const errorMessage = (lastError as Error).message;
+  const apiError = detectAPIError(errorMessage);
+  const detail = apiError
+    ? `${apiError} (${config.ai.provider}/${config.ai.model})`
+    : `AI analysis failed after 3 attempts (${config.ai.provider}/${config.ai.model}): ${errorMessage}`;
+  throw new AIError(detail, {
+    cause: lastError,
+    suggestion: 'Stage fewer files and commit in smaller batches, or choose "Continue with basic commits" to skip AI grouping.',
+  });
+}
+
 export async function analyzeWithAI(
   config: GitShipConfig,
   diffs: FileDiff[],
   heuristicGroups: Array<{ category: string; files: string[] }>,
   issue: IssueContext | null,
 ): Promise<AIGroupResult[]> {
-  const prompt = buildPrompt(diffs, heuristicGroups, issue, config.commits.maxMessageLength);
-
-  try {
-    let responseText: string;
-
-    if (config.ai.provider === 'anthropic') {
-      responseText = await callAnthropic(prompt, config.ai.model);
-    } else if (config.ai.provider === 'gemini') {
-      responseText = await callGemini(prompt, config.ai.model ?? 'gemini-3-flash-preview');
-    } else {
-      responseText = await callOpenAI(prompt, config.ai.model);
-    }
-
-    const parsed = parseAIResponse(responseText);
-    if (!parsed || parsed.length === 0) {
-      const detail = responseText.length === 0
-        ? 'The AI returned an empty response.'
-        : `The AI response (${responseText.length} chars) could not be parsed as valid JSON — it was likely cut off before completing.`;
-      throw new AIError(detail, {
-        suggestion: 'This usually means there were too many files for the AI to process at once. Try staging fewer files, or commit in smaller batches.',
-      });
-    }
-
-    return parsed;
-  } catch (error) {
-    if (error instanceof AIError) throw error;
-
-    const errorMessage = (error as Error).message;
-    const apiError = detectAPIError(errorMessage);
-    const detail = apiError
-      ? `${apiError} (${config.ai.provider}/${config.ai.model})`
-      : `AI analysis failed (${config.ai.provider}/${config.ai.model}): ${errorMessage}`;
-    throw new AIError(detail, { cause: error });
+  // For very large changesets, split into chunks and run in parallel
+  if (diffs.length > 20) {
+    return analyzeChunked(config, diffs, heuristicGroups, issue);
   }
+
+  return analyzeWithRetry(config, diffs, heuristicGroups, issue);
 }
