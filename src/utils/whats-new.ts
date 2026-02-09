@@ -20,8 +20,38 @@ interface ReleaseNotes {
 
 // Release notes for each version - add new versions here
 const RELEASE_NOTES: Record<string, ReleaseNotes> = {
+  "1.3.0": {
+    version: "1.3.0",
+    tagline: "Interactive File Picker & Richer Commit Messages",
+    highlights: [
+      {
+        emoji: "✅",
+        title: "Interactive File Selection",
+        description:
+          "Choose which changed files to include — skip local config tweaks or cherry-pick across branches",
+      },
+      {
+        emoji: "📝",
+        title: "Rich Commit Bodies & Footers",
+        description:
+          "AI generates detailed body text (no length limit, auto-wrapped) and Addresses/Refs footers that map commits to requirements",
+      },
+      {
+        emoji: "🚫",
+        title: "Configurable Ignore Patterns",
+        description:
+          "Customize which files are excluded via ignorePatterns in .gitshiprc.json — supports dir/**, prefix*, and exact matches",
+      },
+      {
+        emoji: "📖",
+        title: "Updated Documentation",
+        description:
+          "README now covers commit message structure (header/body/footer), ignore patterns, and the file picker",
+      },
+    ],
+  },
   "1.2.1": {
-    version: "1.3.1",
+    version: "1.2.1",
     tagline: "Smarter Prompts for Large Changesets",
     highlights: [
       {

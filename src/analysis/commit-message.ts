@@ -18,7 +18,7 @@ export function formatCommitMessage(
   if (!conventional) {
     const ref = includeIssueRef && issueId ? ` (${issueId})` : '';
     const header = `${group.summary}${ref}`;
-    const body = group.body ? `\n\n${group.body}` : '';
+    const body = group.body ? `\n\n${wrapText(group.body)}` : '';
     return `${header}${body}`;
   }
 
@@ -38,14 +38,14 @@ export function formatCommitMessage(
   const bodyParts: string[] = [];
 
   if (group.body) {
-    bodyParts.push(group.body);
+    bodyParts.push(wrapText(group.body));
   }
 
   // Build the footer (requirement tracking and refs)
   const footerParts: string[] = [];
 
   if (group.addresses) {
-    footerParts.push(`Addresses: ${group.addresses}`);
+    footerParts.push(wrapText(`Addresses: ${group.addresses}`));
   }
 
   if (includeIssueRef && issueId) {
@@ -81,6 +81,44 @@ function sanitizeScope(scope: string): string {
     .replace(/[^a-zA-Z0-9/_-]/g, '')
     .replace(/\//g, '-')
     .slice(0, 30);
+}
+
+/**
+ * Word-wrap a single line to `maxLen` characters, preserving leading
+ * whitespace (e.g. bullet-point indentation like "- ").
+ */
+function wrapLine(line: string, maxLen: number): string {
+  if (line.length <= maxLen) return line;
+
+  const leadingMatch = line.match(/^(\s*[-*]\s?|\s+)/);
+  const indent = leadingMatch ? leadingMatch[0] : '';
+  const continuationIndent = indent || '  ';
+
+  const words = line.split(' ');
+  const lines: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    const prefix = current.length === 0
+      ? (lines.length === 0 ? '' : continuationIndent)
+      : ' ';
+    if (current.length + prefix.length + word.length > maxLen && current.length > 0) {
+      lines.push(current);
+      current = continuationIndent + word;
+    } else {
+      current += prefix + word;
+    }
+  }
+  if (current.length > 0) lines.push(current);
+
+  return lines.join('\n');
+}
+
+/**
+ * Word-wrap all lines in a block of text so no line exceeds `maxLen` chars.
+ */
+function wrapText(text: string, maxLen: number = 72): string {
+  return text.split('\n').map((line) => wrapLine(line, maxLen)).join('\n');
 }
 
 function sanitizeSummary(summary: string, maxLength: number): string {
