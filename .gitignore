@@ -30,3 +30,5 @@ yarn-error.log*
 /.cursor
 /task.env.development
 /task
+
+/.gitshiprc.json
