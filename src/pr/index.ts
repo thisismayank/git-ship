@@ -194,36 +194,45 @@ Output ONLY the PR title, nothing else. No quotes, no preamble.`;
 export async function generatePRTitleWithAI(
   options: AIGeneratePROptions,
 ): Promise<string> {
-  const { config } = options;
-  const prompt = buildPRTitlePrompt(options);
+  const { config, issue, commits } = options;
 
-  const provider = config.ai.provider;
-  const model = config.ai.model;
+  try {
+    const prompt = buildPRTitlePrompt(options);
+    const provider = config.ai.provider;
+    const model = config.ai.model;
 
-  let title: string;
+    let title: string;
 
-  switch (provider) {
-    case "openai":
-      title = await callOpenAIForPR(prompt, model);
-      break;
-    case "anthropic":
-      title = await callAnthropicForPR(prompt, model);
-      break;
-    case "gemini":
-      title = await callGeminiForPR(prompt, model);
-      break;
-    default:
-      throw new Error(`Unknown AI provider: ${provider}`);
+    switch (provider) {
+      case "openai":
+        title = await callOpenAIForPR(prompt, model);
+        break;
+      case "anthropic":
+        title = await callAnthropicForPR(prompt, model);
+        break;
+      case "gemini":
+        title = await callGeminiForPR(prompt, model);
+        break;
+      default:
+        return generatePRTitle(issue, commits);
+    }
+
+    // Clean up: remove quotes, trim, enforce max length
+    title = title.trim().replace(/^["']|["']$/g, "");
+
+    if (!title) {
+      return generatePRTitle(issue, commits);
+    }
+
+    if (title.length > GITHUB_PR_TITLE_MAX_LENGTH) {
+      title = title.slice(0, GITHUB_PR_TITLE_MAX_LENGTH - 1) + "…";
+    }
+
+    return title;
+  } catch {
+    // Fall back to heuristic title if AI fails
+    return generatePRTitle(issue, commits);
   }
-
-  // Clean up: remove quotes, trim, enforce max length
-  title = title.trim().replace(/^["']|["']$/g, "");
-
-  if (title.length > GITHUB_PR_TITLE_MAX_LENGTH) {
-    title = title.slice(0, GITHUB_PR_TITLE_MAX_LENGTH - 1) + "…";
-  }
-
-  return title;
 }
 
 function buildPRPrompt(options: AIGeneratePROptions): string {
