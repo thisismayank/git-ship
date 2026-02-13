@@ -49,6 +49,7 @@ export const configSchema = z.object({
       .default(['feat', 'fix', 'chore', 'docs', 'style', 'refactor', 'test', 'ci', 'build', 'perf']),
     includeIssueRef: z.boolean().default(true),
     maxMessageLength: z.number().min(20).max(200).default(72),
+    maxBodyLineLength: z.number().min(20).max(200).default(72),
   }).default({}),
 
   ignorePatterns: z.array(z.string()).default([

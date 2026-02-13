@@ -361,6 +361,7 @@ async function ship(options: {
     issueId,
     allowedTypes: config.commits.allowedTypes,
     maxHeaderLength: config.commits.maxMessageLength,
+    maxBodyLineLength: config.commits.maxBodyLineLength,
   });
 
   const results = await withSpinner(

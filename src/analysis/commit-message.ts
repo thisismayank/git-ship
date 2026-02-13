@@ -7,6 +7,8 @@ export interface CommitMessageOptions {
   allowedTypes: string[];
   /** Maximum length for the commit header (first line) */
   maxHeaderLength: number;
+  /** Maximum length for body lines (default: 72) */
+  maxBodyLineLength?: number;
 }
 
 export function formatCommitMessage(
@@ -14,11 +16,12 @@ export function formatCommitMessage(
   options: CommitMessageOptions,
 ): string {
   const { conventional, includeIssueRef, issueId, allowedTypes, maxHeaderLength } = options;
+  const bodyLineLength = options.maxBodyLineLength ?? 72;
 
   if (!conventional) {
     const ref = includeIssueRef && issueId ? ` (${issueId})` : '';
     const header = `${group.summary}${ref}`;
-    const body = group.body ? `\n\n${wrapText(group.body)}` : '';
+    const body = group.body ? `\n\n${wrapText(group.body, bodyLineLength)}` : '';
     return `${header}${body}`;
   }
 
@@ -38,14 +41,14 @@ export function formatCommitMessage(
   const bodyParts: string[] = [];
 
   if (group.body) {
-    bodyParts.push(wrapText(group.body));
+    bodyParts.push(wrapText(group.body, bodyLineLength));
   }
 
   // Build the footer (requirement tracking and refs)
   const footerParts: string[] = [];
 
   if (group.addresses) {
-    footerParts.push(wrapText(`Addresses: ${group.addresses}`));
+    footerParts.push(wrapText(`Addresses: ${group.addresses}`, bodyLineLength));
   }
 
   if (includeIssueRef && issueId) {
@@ -61,7 +64,9 @@ export function formatCommitMessage(
     sections.push(footerParts.join('\n'));
   }
 
-  const messageBody = sections.length > 0 ? `\n\n${sections.join('\n\n')}` : '';
+  // Final safety wrap: re-wrap the entire body to catch any edge cases
+  const assembledBody = sections.join('\n\n');
+  const messageBody = assembledBody ? `\n\n${wrapText(assembledBody, bodyLineLength)}` : '';
 
   return `${header}${messageBody}`;
 }
