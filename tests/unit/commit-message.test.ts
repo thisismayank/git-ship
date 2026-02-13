@@ -7,7 +7,8 @@ const defaultOptions = {
   includeIssueRef: true,
   issueId: 'ENG-123',
   allowedTypes: ['feat', 'fix', 'chore', 'docs', 'style', 'refactor', 'test', 'ci', 'build', 'perf'],
-  maxMessageLength: 72,
+  maxHeaderLength: 72,
+  maxBodyLineLength: 72,
 };
 
 function makeGroup(overrides: Partial<CommitGroup> = {}): CommitGroup {
@@ -69,5 +70,23 @@ describe('formatCommitMessage', () => {
   it('sanitizes scope with special characters', () => {
     const msg = formatCommitMessage(makeGroup({ scope: 'src/controllers' }), defaultOptions);
     expect(msg).toContain('feat(src-controllers)');
+  });
+
+  it('wraps long body lines to maxBodyLineLength', () => {
+    const longBody = 'Increase the Node.js heap limit in the Dockerfile to 8192 MB to prevent out-of-memory errors during the Vite production build.';
+    const msg = formatCommitMessage(makeGroup({ body: longBody }), defaultOptions);
+    const lines = msg.split('\n');
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(72);
+    }
+  });
+
+  it('wraps long addresses lines', () => {
+    const longAddresses = "Addresses 'Option A: Increase Node.js heap limit (Quick fix)' from ELM-1326 which is a very long requirement description";
+    const msg = formatCommitMessage(makeGroup({ addresses: longAddresses }), defaultOptions);
+    const lines = msg.split('\n');
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(72);
+    }
   });
 });
