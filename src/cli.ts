@@ -28,7 +28,7 @@ import { GraphiteAdapter } from './review/graphite.js';
 import { withSpinner } from './ui/spinner.js';
 import { displayIssueContext, displayCommitPlan, displayReviewResults, displayChangedFiles } from './ui/display.js';
 import { promptIssueId, promptConfirmIssueId, promptCommitPlanAction, promptEditCommitMessage, promptReviewAction, promptConfirmPush, promptAIFailureAction, promptPlainTextRequirements, promptCreatePR, promptPRTitle, promptPRDraft, promptEditPRBody, promptPRBodyEditor, promptFileSelection } from './ui/prompts.js';
-import { createPRAdapter, isPRSupported, generatePRTitle, generatePRBody, generatePRBodyWithAI } from './pr/index.js';
+import { createPRAdapter, isPRSupported, generatePRTitle, generatePRTitleWithAI, generatePRBody, generatePRBodyWithAI } from './pr/index.js';
 import { matchesAnyPattern } from './utils/patterns.js';
 import { logger, setLogLevel } from './utils/logger.js';
 import { GitShipError, AIError } from './utils/errors.js';
@@ -446,18 +446,15 @@ async function ship(options: {
         const baseBranch = await prAdapter.getDefaultBaseBranch();
 
         // Generate PR title and body using AI
-        const defaultTitle = generatePRTitle(issueContext, groups);
+        const aiOptions = { issue: issueContext, commits: groups, branchName, baseBranch, config };
+        const defaultTitle = issueContext?.source === 'plain'
+          ? await withSpinner('Generating PR title with AI', () => generatePRTitleWithAI(aiOptions))
+          : generatePRTitle(issueContext, groups);
         const prTitle = await promptPRTitle(defaultTitle);
 
         const prBody = await withSpinner(
           'Generating PR description with AI',
-          () => generatePRBodyWithAI({
-            issue: issueContext,
-            commits: groups,
-            branchName,
-            baseBranch,
-            config,
-          }),
+          () => generatePRBodyWithAI(aiOptions),
         );
 
         // Ask if user wants to edit the body
@@ -497,18 +494,15 @@ async function ship(options: {
     if (wantDescription) {
       const baseBranch = 'main'; // Default assumption
 
+      const aiOptions = { issue: issueContext, commits: groups, branchName, baseBranch, config };
       const prBody = await withSpinner(
         'Generating PR description with AI',
-        () => generatePRBodyWithAI({
-          issue: issueContext,
-          commits: groups,
-          branchName,
-          baseBranch,
-          config,
-        }),
+        () => generatePRBodyWithAI(aiOptions),
       );
 
-      const defaultTitle = generatePRTitle(issueContext, groups);
+      const defaultTitle = issueContext?.source === 'plain'
+        ? await withSpinner('Generating PR title with AI', () => generatePRTitleWithAI(aiOptions))
+        : generatePRTitle(issueContext, groups);
 
       console.log('\n' + chalk.bold.cyan('─── PR Title ───'));
       console.log(defaultTitle);
@@ -951,20 +945,20 @@ program
       // Reverse to show oldest commits first (chronological order)
       commitGroups.reverse();
 
-      // Generate title
-      const defaultTitle = options.title || generatePRTitle(issueContext, commitGroups);
+      // Generate title and body using AI
+      const aiOptions = { issue: issueContext, commits: commitGroups, branchName, baseBranch, config };
+      let defaultTitle = options.title;
+      if (!defaultTitle) {
+        defaultTitle = issueContext?.source === 'plain'
+          ? await withSpinner('Generating PR title with AI', () => generatePRTitleWithAI(aiOptions))
+          : generatePRTitle(issueContext, commitGroups);
+      }
       const prTitle = await promptPRTitle(defaultTitle);
 
       // Generate body using AI
       const prBody = await withSpinner(
         'Generating PR description with AI',
-        () => generatePRBodyWithAI({
-          issue: issueContext,
-          commits: commitGroups,
-          branchName,
-          baseBranch,
-          config,
-        }),
+        () => generatePRBodyWithAI(aiOptions),
       );
 
       // Ask if user wants to edit
